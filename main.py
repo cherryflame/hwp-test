@@ -6,7 +6,7 @@ from collections import defaultdict
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP="백업 문서 중복·유사본 검사기 v3"
+APP="백업 문서 중복·유사본 검사기 v4"
 EXTS={".hwp",".hwpx",".docx",".txt"}
 
 def fhash(p):
@@ -113,6 +113,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title(APP); self.geometry("1220x780"); self.minsize(900,600)
         self.folders=[]; self.records=[]; self.groups=[]; self.q=queue.Queue(); self.running=False
+        self.active_filter="전체"; self.result_counts={"전체":0,"완전 동일":0,"내용 동일":0,"유사":0,"읽기 실패":0}
         self.ui(); self.after(100,self.poll)
     def ui(self):
         head=ttk.Frame(self,padding=10);head.pack(fill="x")
@@ -141,13 +142,36 @@ class App(tk.Tk):
         self.pb=ttk.Progressbar(folder_tab);self.pb.pack(fill="x",padx=8)
         self.status=ttk.Label(folder_tab,text="폴더를 추가해 주세요.",padding=(8,5));self.status.pack(fill="x")
 
+        # 결과 요약 = 필터 버튼
+        filterbar=ttk.Frame(folder_tab,padding=(8,5));filterbar.pack(fill="x")
+        self.filter_buttons={}
+        for key in ("전체","완전 동일","내용 동일","유사","읽기 실패"):
+            b=tk.Button(filterbar,text=f"{key} 0",relief="flat",bd=0,padx=11,pady=5,
+                        background="#eef2f5",foreground="#344553",
+                        activebackground="#dceaf3",command=lambda k=key:self.apply_filter(k))
+            b.pack(side="left",padx=(0,5));self.filter_buttons[key]=b
+        ttk.Label(filterbar,text="버튼을 누르면 재검사 없이 결과만 필터링합니다.",foreground="#75828c").pack(side="right")
+
         cols=("judge","score","name","type","size","date","path")
-        self.tree=ttk.Treeview(folder_tab,columns=cols,show="tree headings",selectmode="extended")
+        treebox=ttk.Frame(folder_tab);treebox.pack(fill="both",expand=True,padx=8)
+        self.tree=ttk.Treeview(treebox,columns=cols,show="tree headings",selectmode="extended")
         self.tree.heading("#0",text="그룹")
-        specs=[("judge","판정",95),("score","유사도",70),("name","파일명",210),("type","형식",70),("size","크기",80),("date","수정일",125),("path","경로",430)]
-        for c,t,w in specs:self.tree.heading(c,text=t);self.tree.column(c,width=w)
-        self.tree.column("#0",width=65)
-        self.tree.pack(fill="both",expand=True,padx=8)
+        specs=[("judge","판정",105),("score","유사도",72),("name","파일명",245),("type","형식",76),("size","크기",82),("date","수정일",135),("path","경로",520)]
+        for c,t,w in specs:self.tree.heading(c,text=t);self.tree.column(c,width=w,minwidth=55)
+        self.tree.column("#0",width=68,minwidth=55)
+        self.vscroll=ttk.Scrollbar(treebox,orient="vertical",command=self.tree.yview)
+        self.hscroll=ttk.Scrollbar(treebox,orient="horizontal",command=self.tree.xview)
+        self.tree.configure(yscrollcommand=self.vscroll.set,xscrollcommand=self.hscroll.set)
+        self.tree.grid(row=0,column=0,sticky="nsew")
+        self.vscroll.grid(row=0,column=1,sticky="ns")
+        self.hscroll.grid(row=1,column=0,sticky="ew")
+        treebox.rowconfigure(0,weight=1);treebox.columnconfigure(0,weight=1)
+
+        # 결과 그룹 시각 구분
+        self.tree.tag_configure("exact",background="#f2f7fb")
+        self.tree.tag_configure("content",background="#f1f8f3")
+        self.tree.tag_configure("similar",background="#fff9e9")
+        self.tree.tag_configure("error",background="#fff1f1")
 
         foot=ttk.Frame(folder_tab,padding=8);foot.pack(fill="x")
         ttk.Button(foot,text="선택한 두 파일 차이 보기",command=self.diffwin).pack(side="left")
@@ -356,6 +380,19 @@ class App(tk.Tk):
                 if score>=cut:edges.append((a,b,score))
                 if n%100==0:self.q.put(("phase",f"유사도 정밀 비교 중 · {n:,}/{len(candidates):,}쌍"))
             for a,b,score in sorted(edges,key=lambda x:-x[2]):groups.append(("유사",score,[a,b]))
+
+            # 같은 파일 조합은 순서가 뒤집히거나 여러 경로에서 다시 발견돼도 한 번만 표시.
+            # 판정 우선순위: 완전 동일 > 내용 동일 > 유사
+            priority={"완전 동일":3,"내용 동일":2,"유사":1}
+            unique={}
+            for judge,score,items in groups:
+                key=tuple(sorted(os.path.normcase(os.path.abspath(r.path)) for r in items))
+                old=unique.get(key)
+                if old is None or priority[judge]>priority[old[0]] or (priority[judge]==priority[old[0]] and score>old[1]):
+                    unique[key]=(judge,score,items)
+            groups=list(unique.values())
+            groups.sort(key=lambda g:(-priority[g[0]],-g[1],tuple(r.name.lower() for r in g[2])))
+
             self.records=rec;self.groups=groups;self.q.put(("done",))
         except Exception as e:self.q.put(("fatal",str(e)))
     def poll(self):
@@ -375,15 +412,53 @@ class App(tk.Tk):
         except queue.Empty:pass
         self.after(100,self.poll)
     def render(self):
-        for gi,(j,s,rs) in enumerate(self.groups,1):
-            root=self.tree.insert("","end",text=str(gi),values=(j,f"{s*100:.1f}%","","","","",""),open=True)
-            for r in rs:self.tree.insert(root,"end",values=("","",r.name,r.kind,self.sz(r.size),time.strftime("%Y-%m-%d %H:%M",time.localtime(r.mtime)),r.path))
         errs=[r for r in self.records if r.err]
-        if errs:
-            root=self.tree.insert("","end",text="오류",values=("읽기 실패","",f"{len(errs)}개","","","",""),open=False)
-            for r in errs:self.tree.insert(root,"end",values=("","",r.name,r.ext,self.sz(r.size),"",r.path+" | "+r.err))
-        self.status["text"]=f"완료 · 대상 {len(self.records)}개 · 결과 그룹 {len(self.groups)}개 · 읽기 실패 {len(errs)}개"
+        counts={"완전 동일":0,"내용 동일":0,"유사":0}
+        for j,score,rs in self.groups:counts[j]=counts.get(j,0)+1
+        self.result_counts={
+            "전체":len(self.groups)+(1 if errs else 0),
+            "완전 동일":counts.get("완전 동일",0),
+            "내용 동일":counts.get("내용 동일",0),
+            "유사":counts.get("유사",0),
+            "읽기 실패":len(errs)
+        }
+        for k,b in self.filter_buttons.items():
+            b.configure(text=f"{k} {self.result_counts[k]}")
+        self.active_filter="전체"
+        self.apply_filter("전체")
+        self.status["text"]=(f"완료 · 대상 {len(self.records)}개 · 결과 그룹 {len(self.groups)}개 · "
+                             f"읽기 실패 {len(errs)}개")
         self.running=False;self.start["state"]="normal";self.save["state"]="normal"
+
+    def apply_filter(self,key):
+        self.active_filter=key
+        for k,b in self.filter_buttons.items():
+            if k==key:
+                b.configure(background="#315b7b",foreground="white",relief="sunken")
+            else:
+                b.configure(background="#eef2f5",foreground="#344553",relief="flat")
+        self.render_results()
+
+    def render_results(self):
+        self.tree.delete(*self.tree.get_children())
+        shown=0
+        for gi,(j,score,rs) in enumerate(self.groups,1):
+            if self.active_filter not in ("전체",j):continue
+            tag={"완전 동일":"exact","내용 동일":"content","유사":"similar"}.get(j,"")
+            root=self.tree.insert("","end",text=str(gi),values=(j,f"{score*100:.1f}%","","","","",""),open=True,tags=(tag,))
+            for r in rs:
+                self.tree.insert(root,"end",values=("","",r.name,r.kind,self.sz(r.size),
+                    time.strftime("%Y-%m-%d %H:%M",time.localtime(r.mtime)),r.path))
+            shown+=1
+        if self.active_filter in ("전체","읽기 실패"):
+            errs=[r for r in self.records if r.err]
+            if errs:
+                root=self.tree.insert("","end",text="오류",values=("읽기 실패","",f"{len(errs)}개","","","",""),open=True,tags=("error",))
+                for r in errs:
+                    self.tree.insert(root,"end",values=("","",r.name,r.ext,self.sz(r.size),"",r.path+" | "+r.err))
+        if self.tree.get_children():
+            self.tree.yview_moveto(0);self.tree.xview_moveto(0)
+
     def selected(self):
         d={r.path:r for r in self.records};out=[]
         for x in self.tree.selection():
