@@ -1,22 +1,28 @@
 name: Build Windows EXE
+
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
+
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
+
       - name: Build EXE
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name HWP5_Read_Test --collect-all syhwp main.py
+        run: pyinstaller --noconfirm --clean --onefile --windowed --collect-all syhwp --name Document_Backup_Finder main.py
+
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: HWP5_Read_Test_Windows
-          path: dist/HWP5_Read_Test.exe
+          name: Document_Backup_Finder_Windows
+          path: dist/Document_Backup_Finder.exe
