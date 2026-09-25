@@ -1,2 +1,0 @@
-syhwp==0.0.8
-pyinstaller>=6.0,<7
