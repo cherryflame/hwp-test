@@ -1,20 +1,31 @@
-# HWP 5.x 읽기 EXE 검증판
+# 백업 문서 중복·유사본 검사기 v1
 
-목적은 문서 정리기 본체를 만들기 전에 **Python이 설치되지 않은 Windows PC에서 HWP 5.x 본문 추출이 되는지** 확인하는 것입니다.
+Windows에서 백업 폴더의 HWP 5.x / HWPX / DOCX / TXT를 읽어 중복·유사 문서를 찾는 읽기 전용 도구입니다.
 
-## GitHub에서 EXE 만들기
-1. 새 GitHub 저장소를 만듭니다.
-2. 이 ZIP의 내용물을 저장소 최상위에 그대로 업로드합니다. `.github` 폴더도 반드시 포함합니다.
-3. 저장소의 **Actions** 탭 → **Build Windows EXE** → **Run workflow**를 누릅니다.
-4. 빌드가 끝난 실행 결과 페이지 아래 **Artifacts**에서 `HWP5_Read_Test_Windows`를 받습니다.
-5. 압축을 풀어 `HWP5_Read_Test.exe`를 실행합니다.
+## 기능
+- 두 모드: `폴더 중복 검사` / `파일 2개 비교`
+- 파일 2개 비교는 HWP↔DOCX 등 서로 다른 형식끼리도 본문 비교
+- 좌우 본문 비교 + 추가/삭제/변경 구간 강조 + 유사도/글자수/변경 줄 수 요약
+- 여러 폴더 추가 및 하위 폴더 검사
+- 완전 동일: 파일 SHA-256 동일
+- 내용 동일: 공백/줄바꿈 차이를 제외한 추출 본문 동일
+- 유사: 기본 90%, 70~99% 조절
+- 두 파일 차이 보기
+- 결과 CSV 저장
+- 원본 삭제/이동/수정 기능 없음
+- TXT: UTF-8, UTF-8 BOM, CP949/EUC-KR 대응
+- HWP: HWP 5.x 대상. 97~3.0 구형 포맷은 현재 지원 대상 아님.
 
-## 테스트
-`HWP 파일 선택`을 눌러 평소 사용하는 `.hwp`를 엽니다. 본문이 화면에 정상적으로 나오면 1차 검증 성공입니다.
+## GitHub Actions 빌드
+저장소 최상위에 main.py, requirements.txt, README.md, .github 폴더가 오도록 업로드합니다.
+Actions → Build Windows EXE → Run workflow.
+완료 후 Artifacts의 Document_Backup_Finder_Windows를 내려받습니다.
 
-이 프로그램은 파일을 읽기만 하며 저장·수정·삭제하지 않습니다.
+## 1차 실사용 테스트에서 볼 것
+1. 실제 HWP들이 읽기 실패 없이 잡히는지
+2. 동일 HWP 복사본이 '완전 동일'로 묶이는지
+3. HWP를 다른 이름으로 저장한 파일이 '내용 동일' 또는 '유사'로 잡히는지
+4. TXT/DOCX와 HWP 사이의 동일 본문도 잡히는지
+5. 대형 백업 폴더에서 속도가 어느 정도인지
 
-## 기술 메모
-- HWP/HWPX 읽기: syhwp 0.0.8 (MIT)
-- EXE 패키징: PyInstaller
-- Windows 빌드: GitHub Actions `windows-latest`
+※ 자동 삭제 기준으로 사용하지 마세요. 이미지·도형·세부 서식이 다른데 본문만 같을 수 있습니다.
