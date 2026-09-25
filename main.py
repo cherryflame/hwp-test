@@ -6,7 +6,7 @@ from collections import defaultdict
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP="백업 문서 중복·유사본 검사기 v4"
+APP="문서 중복·유사성 검사기"
 EXTS={".hwp",".hwpx",".docx",".txt"}
 
 def fhash(p):
@@ -96,7 +96,14 @@ def norm(s):
     s=re.sub(r"[ \t]+"," ",s); s=re.sub(r" *\n *","\n",s); s=re.sub(r"\n{3,}","\n\n",s)
     return s.strip()
 def compact(s):return re.sub(r"\s+","",norm(s))
-def thash(s):return hashlib.sha256(compact(s).encode()).hexdigest()
+def display_safe(s):
+    if not isinstance(s,str): return str(s)
+    # Tk/Windows 표시용: 고립 surrogate만 대체문자로 바꾸고 정상 한글/유니코드는 보존.
+    return s.encode("utf-8",errors="replace").decode("utf-8")
+def safe_utf8(s):
+    # 일부 오래된 문서/파일명에서 고립 surrogate가 들어와도 검사 전체가 실패하지 않게 처리.
+    return s.encode("utf-8",errors="surrogatepass")
+def thash(s):return hashlib.sha256(safe_utf8(compact(s))).hexdigest()
 def shingles(s,k=9,limit=5000):
     s=compact(s)
     if len(s)<=k:return {s} if s else set()
@@ -386,7 +393,7 @@ class App(tk.Tk):
             priority={"완전 동일":3,"내용 동일":2,"유사":1}
             unique={}
             for judge,score,items in groups:
-                key=tuple(sorted(os.path.normcase(os.path.abspath(r.path)) for r in items))
+                key=tuple(sorted(os.path.normcase(os.path.abspath(display_safe(r.path))) for r in items))
                 old=unique.get(key)
                 if old is None or priority[judge]>priority[old[0]] or (priority[judge]==priority[old[0]] and score>old[1]):
                     unique[key]=(judge,score,items)
@@ -415,12 +422,16 @@ class App(tk.Tk):
         errs=[r for r in self.records if r.err]
         counts={"완전 동일":0,"내용 동일":0,"유사":0}
         for j,score,rs in self.groups:counts[j]=counts.get(j,0)+1
+        exact_n=counts.get("완전 동일",0)
+        content_n=counts.get("내용 동일",0)
+        similar_n=counts.get("유사",0)
+        failed_n=len(errs)
         self.result_counts={
-            "전체":len(self.groups)+(1 if errs else 0),
-            "완전 동일":counts.get("완전 동일",0),
-            "내용 동일":counts.get("내용 동일",0),
-            "유사":counts.get("유사",0),
-            "읽기 실패":len(errs)
+            "전체":exact_n+content_n+similar_n+failed_n,
+            "완전 동일":exact_n,
+            "내용 동일":content_n,
+            "유사":similar_n,
+            "읽기 실패":failed_n
         }
         for k,b in self.filter_buttons.items():
             b.configure(text=f"{k} {self.result_counts[k]}")
@@ -447,15 +458,15 @@ class App(tk.Tk):
             tag={"완전 동일":"exact","내용 동일":"content","유사":"similar"}.get(j,"")
             root=self.tree.insert("","end",text=str(gi),values=(j,f"{score*100:.1f}%","","","","",""),open=True,tags=(tag,))
             for r in rs:
-                self.tree.insert(root,"end",values=("","",r.name,r.kind,self.sz(r.size),
-                    time.strftime("%Y-%m-%d %H:%M",time.localtime(r.mtime)),r.path))
+                self.tree.insert(root,"end",values=("","",display_safe(r.name),r.kind,self.sz(r.size),
+                    time.strftime("%Y-%m-%d %H:%M",time.localtime(r.mtime)),display_safe(r.path)))
             shown+=1
         if self.active_filter in ("전체","읽기 실패"):
             errs=[r for r in self.records if r.err]
             if errs:
                 root=self.tree.insert("","end",text="오류",values=("읽기 실패","",f"{len(errs)}개","","","",""),open=True,tags=("error",))
                 for r in errs:
-                    self.tree.insert(root,"end",values=("","",r.name,r.ext,self.sz(r.size),"",r.path+" | "+r.err))
+                    self.tree.insert(root,"end",values=("","",r.name,r.ext,self.sz(r.size),"",display_safe(r.path)+" | "+display_safe(r.err)))
         if self.tree.get_children():
             self.tree.yview_moveto(0);self.tree.xview_moveto(0)
 
