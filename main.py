@@ -6,7 +6,7 @@ from collections import defaultdict
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP="백업 문서 중복·유사본 검사기 v2"
+APP="백업 문서 중복·유사본 검사기 v3"
 EXTS={".hwp",".hwpx",".docx",".txt"}
 
 def fhash(p):
@@ -162,7 +162,8 @@ class App(tk.Tk):
             ttk.Button(row,text="파일 선택",command=lambda i=idx:self.pick_pair(i)).pack(side="left")
         action=ttk.Frame(pairtop);action.pack(fill="x",pady=(8,0))
         ttk.Label(action,text="HWP 5.x · HWPX · DOCX · TXT / 서로 다른 형식도 본문 비교 가능",foreground="#6f7b86").pack(side="left")
-        ttk.Button(action,text="두 파일 비교",command=self.compare_pair).pack(side="right")
+        self.pair_compare_btn=ttk.Button(action,text="두 파일 비교",command=self.compare_pair);self.pair_compare_btn.pack(side="right")
+        ttk.Button(action,text="초기화",command=self.reset_pair).pack(side="right",padx=6)
 
         self.pair_summary=ttk.Label(pair_tab,text="비교할 파일 두 개를 선택해 주세요.",padding=(12,8),font=("",10,"bold"))
         self.pair_summary.pack(fill="x")
@@ -175,40 +176,82 @@ class App(tk.Tk):
             y=ttk.Scrollbar(f,orient="vertical",command=t.yview);t.configure(yscrollcommand=y.set)
             y.pack(side="right",fill="y");t.pack(fill="both",expand=True)
             self.pair_text.append(t)
+        legend=ttk.Frame(pair_tab,padding=(10,4));legend.pack(fill="x")
+        ttk.Label(legend,text="차이 표시:").pack(side="left")
+        tk.Label(legend,text=" A에만 있음 ",background="#ffdede").pack(side="left",padx=(6,3))
+        tk.Label(legend,text=" B에만 있음 ",background="#dff3df").pack(side="left",padx=3)
+        tk.Label(legend,text=" 양쪽 내용 변경 ",background="#fff0a8").pack(side="left",padx=3)
         self.pair_note=ttk.Label(pair_tab,text="",padding=(10,5),foreground="#6f7b86");self.pair_note.pack(fill="x")
 
     def pick_pair(self,idx):
         p=filedialog.askopenfilename(filetypes=[("지원 문서","*.hwp *.hwpx *.docx *.txt"),("모든 파일","*.*")])
         if p:self.pair_paths[idx].set(p)
 
+    def reset_pair(self):
+        for v in self.pair_paths:v.set("")
+        self.pair_summary["text"]="비교할 파일 두 개를 선택해 주세요."
+        self.pair_note["text"]=""
+        for t in self.pair_text:
+            t.configure(state="normal");t.delete("1.0","end");t.configure(state="disabled")
+        # 큰 비교 결과에 대한 참조도 즉시 해제
+        self.pair_result=None
+
     def compare_pair(self):
         a,b=[x.get().strip() for x in self.pair_paths]
         if not a or not b:return messagebox.showinfo(APP,"A와 B 파일을 모두 선택해 주세요.")
+        self.pair_compare_btn["state"]="disabled"
+        self.pair_summary["text"]="두 파일을 읽고 비교하는 중입니다…"
+        for t in self.pair_text:
+            t.configure(state="normal");t.delete("1.0","end");t.configure(state="disabled")
+        threading.Thread(target=self._compare_pair_worker,args=(a,b),daemon=True).start()
+
+    def _compare_pair_worker(self,a,b):
         try:
             ra,rb=R(a),R(b)
             for r in (ra,rb):
                 r.hash=fhash(r.path);r.text,r.kind=read_text(r.path);r.th=thash(r.text)
             ca,cb=compact(ra.text),compact(rb.text)
-            exact=ra.hash==rb.hash
-            content=ra.th==rb.th
+            exact=ra.hash==rb.hash; content=ra.th==rb.th
             if exact:sim=1.0;judge="완전 동일"
             elif content:sim=1.0;judge="내용 동일"
             elif len(ca)+len(cb)<600000:sim=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio();judge="유사/상이"
             else:sim=jac(shingles(ca),shingles(cb));judge="유사/상이"
-
-            sm=difflib.SequenceMatcher(None,norm(ra.text).splitlines(),norm(rb.text).splitlines(),autojunk=False)
+            la,lb=norm(ra.text).splitlines(),norm(rb.text).splitlines()
+            sm=difflib.SequenceMatcher(None,la,lb,autojunk=False)
+            ops=sm.get_opcodes()
             added=removed=changed=0
-            for tag,i1,i2,j1,j2 in sm.get_opcodes():
+            for tag,i1,i2,j1,j2 in ops:
                 if tag=="insert":added+=j2-j1
                 elif tag=="delete":removed+=i2-i1
                 elif tag=="replace":changed+=max(i2-i1,j2-j1)
+            self.q.put(("pairdone",ra,rb,sim,judge,added,removed,changed,ops,la,lb))
+        except Exception as e:self.q.put(("pairfatal",str(e)))
 
-            self.pair_summary["text"]=(f"{judge}  ·  유사도 {sim*100:.2f}%  ·  "
-                f"A {len(ca):,}자 / B {len(cb):,}자  ·  추가 {added}줄 / 삭제 {removed}줄 / 변경 {changed}줄")
-            self.show_side_diff(ra,rb,sm)
-            self.pair_note["text"]=f"A: {ra.kind} · {self.sz(ra.size)}     B: {rb.kind} · {self.sz(rb.size)}"
-        except Exception as e:
-            messagebox.showerror(APP,"비교하지 못했습니다.\n\n"+str(e))
+    def finish_pair(self,ra,rb,sim,judge,added,removed,changed,ops,la,lb):
+        self.pair_result=(ra,rb)
+        self.pair_summary["text"]=(f"{judge}  ·  유사도 {sim*100:.2f}%  ·  "
+            f"A {len(compact(ra.text)):,}자 / B {len(compact(rb.text)):,}자  ·  "
+            f"추가 {added}줄 / 삭제 {removed}줄 / 변경 {changed}줄")
+        self.show_side_diff_lines(ops,la,lb)
+        self.pair_note["text"]=f"A: {ra.kind} · {self.sz(ra.size)}     B: {rb.kind} · {self.sz(rb.size)}"
+        self.pair_compare_btn["state"]="normal"
+
+    def show_side_diff_lines(self,ops,la,lb):
+        ta,tb=self.pair_text
+        for t in (ta,tb):
+            t.configure(state="normal");t.delete("1.0","end")
+            t.tag_configure("same")
+            t.tag_configure("del",background="#ffdede")
+            t.tag_configure("add",background="#dff3df")
+            t.tag_configure("chg",background="#fff0a8")
+        for tag,i1,i2,j1,j2 in ops:
+            taga=tagb="same"
+            if tag=="delete":taga="del"
+            elif tag=="insert":tagb="add"
+            elif tag=="replace":taga=tagb="chg"
+            for line in la[i1:i2]:ta.insert("end",line+"\n",taga)
+            for line in lb[j1:j2]:tb.insert("end",line+"\n",tagb)
+        for t in (ta,tb):t.configure(state="disabled")
 
     def show_side_diff(self,a,b,sm):
         ta,tb=self.pair_text
@@ -238,6 +281,7 @@ class App(tk.Tk):
         if not self.folders:return messagebox.showinfo(APP,"검사할 폴더를 추가해 주세요.")
         if self.running:return
         self.running=True;self.start["state"]="disabled";self.save["state"]="disabled";self.tree.delete(*self.tree.get_children())
+        self.scan_cut=max(.70,min(.99,self.cut.get()/100))
         threading.Thread(target=self.worker,daemon=True).start()
     def worker(self):
         try:
@@ -272,23 +316,46 @@ class App(tk.Tk):
                     for a in x:
                         for b in x:
                             if a.path<b.path:claimed.add((a.path,b.path))
-            valid=[r for r in rec if r.text and not r.err]; cut=max(.70,min(.99,self.cut.get()/100)); edges=[]
-            for i,a in enumerate(valid):
-                ca=compact(a.text);la=len(ca)
-                for b in valid[i+1:]:
-                    pair=tuple(sorted((a.path,b.path)))
-                    if pair in claimed:continue
-                    cb=compact(b.text);lb=len(cb)
-                    if not la or not lb or min(la,lb)/max(la,lb)<.70:continue
-                    if a.sh is None:a.sh=shingles(a.text)
-                    if b.sh is None:b.sh=shingles(b.text)
-                    rough=jac(a.sh,b.sh)
-                    if rough<max(.30,cut-.40):continue
-                    if la+lb<600000:s=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio()
-                    else:s=rough
-                    if s>=cut:edges.append((a,b,s))
-            # pair groups: avoids misleading transitive similarity percentages
-            for a,b,s in sorted(edges,key=lambda x:-x[2]):groups.append(("유사",s,[a,b]))
+            valid=[r for r in rec if r.text and not r.err]; cut=self.scan_cut; edges=[]
+            # 모든 파일쌍을 직접 비교하지 않는다.
+            # 각 문서의 제한된 9글자 조각을 역색인하여 실제로 본문 일부를 공유하는 파일만 후보로 만든다.
+            self.q.put(("phase",f"유사 문서 후보를 만드는 중 · {len(valid)}개 문서"))
+            inv=defaultdict(list); sigs=[]; lengths=[]
+            for idx,r in enumerate(valid):
+                c=compact(r.text); lengths.append(len(c))
+                sg=shingles(c,k=9,limit=1200); sigs.append(sg)
+                # 지나치게 흔한 짧은 조각의 영향 감소를 위해 문서당 최대 1200개
+                for token in sg: inv[token].append(idx)
+
+            pair_hits=defaultdict(int)
+            for ids in inv.values():
+                if len(ids)>80: continue  # 거의 모든 문서에 나오는 상투 조각은 후보 생성에서 제외
+                for x in range(len(ids)):
+                    for y in range(x+1,len(ids)):
+                        i,j=ids[x],ids[y]
+                        if lengths[i] and lengths[j] and min(lengths[i],lengths[j])/max(lengths[i],lengths[j])>=.70:
+                            pair_hits[(i,j)]+=1
+
+            candidates=[]
+            for (i,j),hits in pair_hits.items():
+                pair=tuple(sorted((valid[i].path,valid[j].path)))
+                if pair in claimed:continue
+                # 긴 문서는 우연히 1개 조각만 겹치는 경우가 많으므로 최소 2개 공유
+                if hits>=2 or min(lengths[i],lengths[j])<120:
+                    candidates.append((i,j))
+            self.q.put(("phase",f"유사도 정밀 비교 중 · 후보 {len(candidates):,}쌍"))
+
+            for n,(i,j) in enumerate(candidates,1):
+                a,b=valid[i],valid[j]
+                rough=jac(sigs[i],sigs[j])
+                if rough<max(.30,cut-.40):continue
+                ca,cb=compact(a.text),compact(b.text)
+                if len(ca)+len(cb)<600000:
+                    score=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio()
+                else: score=rough
+                if score>=cut:edges.append((a,b,score))
+                if n%100==0:self.q.put(("phase",f"유사도 정밀 비교 중 · {n:,}/{len(candidates):,}쌍"))
+            for a,b,score in sorted(edges,key=lambda x:-x[2]):groups.append(("유사",score,[a,b]))
             self.records=rec;self.groups=groups;self.q.put(("done",))
         except Exception as e:self.q.put(("fatal",str(e)))
     def poll(self):
@@ -297,7 +364,13 @@ class App(tk.Tk):
                 m=self.q.get_nowait()
                 if m[0]=="max":self.pb["maximum"]=m[1];self.pb["value"]=0
                 elif m[0]=="p":self.pb["value"]=m[1];self.status["text"]=m[2]
+                elif m[0]=="phase":self.status["text"]=m[1]
                 elif m[0]=="done":self.render()
+                elif m[0]=="pairdone":self.finish_pair(*m[1:])
+                elif m[0]=="pairfatal":
+                    self.pair_compare_btn["state"]="normal"
+                    self.pair_summary["text"]="비교에 실패했습니다."
+                    messagebox.showerror(APP,"비교하지 못했습니다.\n\n"+m[1])
                 elif m[0]=="fatal":self.running=False;self.start["state"]="normal";messagebox.showerror(APP,m[1])
         except queue.Empty:pass
         self.after(100,self.poll)
