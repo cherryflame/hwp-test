@@ -123,16 +123,16 @@ class R:
 class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title(APP); self.geometry("1220x780"); self.minsize(900,600)
-        self._app_icon_image=None
+        self._app_icon_images=[]
         try:
             self.iconbitmap(default=resource_path("app.ico"))
         except Exception:
             pass
         try:
-            self._app_icon_image=tk.PhotoImage(file=resource_path("app_icon.png"))
-            self.iconphoto(True,self._app_icon_image)
+            self._app_icon_images=[tk.PhotoImage(file=resource_path(f"app_icon_{n}.png")) for n in (16,32,48,64)]
+            self.iconphoto(True,*self._app_icon_images)
         except Exception:
-            pass
+            self._app_icon_images=[]
         self.folders=[]; self.records=[]; self.groups=[]; self.q=queue.Queue(); self.running=False
         self.active_filter="전체"; self.result_counts={"전체":0,"완전 동일":0,"내용 동일":0,"유사":0,"읽기 실패":0}
         self.skip_diff_transfer_notice=False
@@ -163,7 +163,15 @@ class App(tk.Tk):
         style.configure("TNotebook.Tab",padding=(18,9),background="#e9eef5",foreground="#52606d",borderwidth=0)
         style.map("TNotebook.Tab",background=[("selected","#ffffff")],foreground=[("selected","#245dcc")])
         style.configure("Treeview",background="#ffffff",fieldbackground="#ffffff",rowheight=27,borderwidth=1,relief="flat",bordercolor="#304a68")
-        style.configure("Treeview.Heading",background="#eef3f8",foreground="#17365d",relief="flat",borderwidth=0,padding=(7,7))
+        style.configure("Flat.Treeview",background="#ffffff",fieldbackground="#ffffff",rowheight=27,borderwidth=1,relief="flat",bordercolor="#304a68")
+        style.layout("Flat.Treeview.Heading",[
+            ("Treeheading.padding",{"sticky":"nswe","children":[
+                ("Treeheading.image",{"side":"right","sticky":""}),
+                ("Treeheading.text",{"sticky":"we"})
+            ]})
+        ])
+        style.configure("Flat.Treeview.Heading",background="#eef3f8",foreground="#17365d",
+                        relief="flat",borderwidth=0,padding=(7,7))
         style.map("Treeview",background=[("selected","#dceaff")],foreground=[("selected","#172b4d")])
         style.configure("TEntry",fieldbackground="#ffffff",padding=7,bordercolor="#304a68")
         style.configure("TLabelframe",background="#ffffff",borderwidth=1,relief="flat",bordercolor="#304a68")
@@ -175,6 +183,15 @@ class App(tk.Tk):
         style.configure("Navy.Horizontal.TScrollbar",background="#ffffff",troughcolor="#ffffff",
                         bordercolor="#17365d",arrowcolor="#17365d",lightcolor="#ffffff",darkcolor="#ffffff")
         style.configure("ScrollCorner.TFrame",background="#e8edf2",borderwidth=1,relief="solid")
+
+
+    def secondary_button(self,parent,text,command,state="normal"):
+        return tk.Button(parent,text=text,command=command,state=state,
+                         font=("Malgun Gothic",9),fg="#17365d",bg="#ffffff",
+                         activeforeground="#17365d",activebackground="#eef4fa",
+                         disabledforeground="#9aa4ae",disabledbackground="#ffffff",
+                         relief="solid",bd=1,highlightthickness=0,
+                         padx=13,pady=5,cursor="arrow")
 
     @staticmethod
     def short_path(p):
@@ -198,8 +215,8 @@ class App(tk.Tk):
         # 폴더 중복 검사
         box=ttk.LabelFrame(folder_tab,text="검사할 폴더",padding=8);box.pack(fill="x",padx=8,pady=(8,0))
         top=ttk.Frame(box);top.pack(fill="x",pady=(0,6))
-        ttk.Button(top,text="폴더 추가",command=self.add).pack(side="left")
-        ttk.Button(top,text="선택 폴더 제거",command=self.remove).pack(side="left",padx=6)
+        self.secondary_button(top,"폴더 추가",self.add).pack(side="left")
+        self.secondary_button(top,"선택 폴더 제거",self.remove).pack(side="left",padx=6)
         self.lb=tk.Listbox(box,height=4,selectmode="extended");self.lb.pack(fill="x")
 
         opt=ttk.Frame(folder_tab,padding=8);opt.pack(fill="x")
@@ -207,7 +224,7 @@ class App(tk.Tk):
         self.cut=tk.IntVar(value=90);ttk.Spinbox(opt,from_=70,to=99,width=5,textvariable=self.cut).pack(side="left",padx=5)
         ttk.Label(opt,text="%").pack(side="left")
         self.start=ttk.Button(opt,text="검사 시작",command=self.go,style="Primary.TButton");self.start.pack(side="right")
-        self.save=ttk.Button(opt,text="CSV 저장",command=self.csv,state="disabled");self.save.pack(side="right",padx=6)
+        self.save=self.secondary_button(opt,"CSV 저장",self.csv,state="disabled");self.save.pack(side="right",padx=6)
 
         self.pb=ttk.Progressbar(folder_tab);self.pb.pack(fill="x",padx=8)
         self.status=ttk.Label(folder_tab,text="폴더를 추가해 주세요.",padding=(8,5));self.status.pack(fill="x")
@@ -224,7 +241,7 @@ class App(tk.Tk):
 
         cols=("judge","score","name","type","size","date","path")
         treebox=ttk.Frame(folder_tab);treebox.pack(fill="both",expand=True,padx=8)
-        self.tree=ttk.Treeview(treebox,columns=cols,show="tree headings",selectmode="extended")
+        self.tree=ttk.Treeview(treebox,columns=cols,show="tree headings",selectmode="extended",style="Flat.Treeview")
         self.tree.heading("#0",text="그룹")
         specs=[("judge","판정",105),("score","유사도",72),("name","파일명",245),("type","형식",76),("size","크기",82),("date","수정일",135),("path","경로",520)]
         for c,t,w in specs:self.tree.heading(c,text=t);self.tree.column(c,width=w,minwidth=55)
@@ -254,11 +271,11 @@ class App(tk.Tk):
             row=ttk.Frame(pairtop,style="Card.TFrame");row.pack(fill="x",pady=5)
             ttk.Label(row,text=label,width=3,font=("Malgun Gothic",11,"bold"),style="Card.TLabel").pack(side="left")
             ttk.Entry(row,textvariable=self.pair_paths[idx]).pack(side="left",fill="x",expand=True,padx=(0,7))
-            ttk.Button(row,text="파일 선택",command=lambda i=idx:self.pick_pair(i),padding=(14,7)).pack(side="left")
+            self.secondary_button(row,"파일 선택",lambda i=idx:self.pick_pair(i)).pack(side="left")
         action=ttk.Frame(pairtop,style="Card.TFrame");action.pack(fill="x",pady=(8,0))
         ttk.Label(action,text="HWP 5.x · HWPX · DOCX · TXT / 서로 다른 형식도 본문 비교 가능",style="CardMuted.TLabel").pack(side="left")
         self.pair_compare_btn=ttk.Button(action,text="두 파일 비교",command=self.compare_pair,style="Primary.TButton");self.pair_compare_btn.pack(side="right")
-        ttk.Button(action,text="초기화",command=self.reset_pair).pack(side="right",padx=6)
+        self.secondary_button(action,"초기화",self.reset_pair).pack(side="right",padx=(18,8))
 
         self.pair_summary=ttk.Label(pair_tab,text="비교할 파일 두 개를 선택해 주세요.",padding=(12,8),font=("Malgun Gothic",10,"bold"))
         self.pair_summary.pack(fill="x")
