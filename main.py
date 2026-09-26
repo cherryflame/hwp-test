@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import os, re, csv, time, queue, hashlib, zipfile, difflib, threading
+import os, sys, re, csv, time, queue, hashlib, zipfile, difflib, threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from collections import defaultdict
@@ -143,19 +143,28 @@ class App(tk.Tk):
         style.configure("CardMuted.TLabel",background="#ffffff",foreground="#718096")
         style.configure("Title.TLabel",background="#f5f7fa",foreground="#172b4d",font=("Malgun Gothic",16,"bold"))
         style.configure("PanelTitle.TLabel",background="#ffffff",foreground="#172b4d",font=("Malgun Gothic",10,"bold"))
-        style.configure("TButton",padding=(12,7),relief="flat",borderwidth=0)
+        style.configure("TButton",padding=(12,7),relief="solid",borderwidth=1,
+                        background="#ffffff",foreground="#17365d",bordercolor="#304a68")
         style.map("TButton",background=[("active","#e7eef8")])
-        style.configure("Primary.TButton",background="#2f6fed",foreground="white",padding=(14,8),borderwidth=0)
+        style.configure("Primary.TButton",background="#214f78",foreground="white",padding=(14,8),
+                        relief="solid",borderwidth=1,bordercolor="#17365d")
         style.map("Primary.TButton",background=[("active","#245dcc"),("disabled","#a9b8cf")],foreground=[("disabled","#f5f7fa")])
         style.configure("TNotebook",background="#f5f7fa",borderwidth=0,tabmargins=(0,0,0,0))
         style.configure("TNotebook.Tab",padding=(18,9),background="#e9eef5",foreground="#52606d",borderwidth=0)
         style.map("TNotebook.Tab",background=[("selected","#ffffff")],foreground=[("selected","#245dcc")])
-        style.configure("Treeview",background="#ffffff",fieldbackground="#ffffff",rowheight=27,borderwidth=0)
-        style.configure("Treeview.Heading",background="#eef3f8",foreground="#415466",relief="flat",padding=(7,7))
+        style.configure("Treeview",background="#ffffff",fieldbackground="#ffffff",rowheight=27,borderwidth=1,relief="solid",bordercolor="#304a68")
+        style.configure("Treeview.Heading",background="#eef3f8",foreground="#17365d",relief="solid",borderwidth=1,padding=(7,7))
         style.map("Treeview",background=[("selected","#dceaff")],foreground=[("selected","#172b4d")])
-        style.configure("TEntry",fieldbackground="#ffffff",padding=7)
-        style.configure("TLabelframe",background="#ffffff",borderwidth=1,relief="solid")
+        style.configure("TEntry",fieldbackground="#ffffff",padding=7,bordercolor="#304a68")
+        style.configure("TLabelframe",background="#ffffff",borderwidth=1,relief="solid",bordercolor="#304a68")
         style.configure("TLabelframe.Label",background="#ffffff",foreground="#415466",font=("Malgun Gothic",9,"bold"))
+        style.configure("Horizontal.TProgressbar",troughcolor="#f7f8fa",background="#214f78",
+                        bordercolor="#17365d",lightcolor="#214f78",darkcolor="#214f78",thickness=10)
+        style.configure("Navy.Vertical.TScrollbar",background="#ffffff",troughcolor="#ffffff",
+                        bordercolor="#17365d",arrowcolor="#17365d",lightcolor="#ffffff",darkcolor="#ffffff")
+        style.configure("Navy.Horizontal.TScrollbar",background="#ffffff",troughcolor="#ffffff",
+                        bordercolor="#17365d",arrowcolor="#17365d",lightcolor="#ffffff",darkcolor="#ffffff")
+        style.configure("ScrollCorner.TFrame",background="#e8edf2",borderwidth=1,relief="solid")
 
     @staticmethod
     def short_path(p):
@@ -187,7 +196,7 @@ class App(tk.Tk):
         ttk.Label(opt,text="유사도 기준").pack(side="left")
         self.cut=tk.IntVar(value=90);ttk.Spinbox(opt,from_=70,to=99,width=5,textvariable=self.cut).pack(side="left",padx=5)
         ttk.Label(opt,text="%").pack(side="left")
-        self.start=ttk.Button(opt,text="검사 시작",command=self.go);self.start.pack(side="right")
+        self.start=ttk.Button(opt,text="검사 시작",command=self.go,style="Primary.TButton");self.start.pack(side="right")
         self.save=ttk.Button(opt,text="CSV 저장",command=self.csv,state="disabled");self.save.pack(side="right",padx=6)
 
         self.pb=ttk.Progressbar(folder_tab);self.pb.pack(fill="x",padx=8)
@@ -210,12 +219,13 @@ class App(tk.Tk):
         specs=[("judge","판정",105),("score","유사도",72),("name","파일명",245),("type","형식",76),("size","크기",82),("date","수정일",135),("path","경로",520)]
         for c,t,w in specs:self.tree.heading(c,text=t);self.tree.column(c,width=w,minwidth=55)
         self.tree.column("#0",width=68,minwidth=55)
-        self.vscroll=ttk.Scrollbar(treebox,orient="vertical",command=self.tree.yview)
-        self.hscroll=ttk.Scrollbar(treebox,orient="horizontal",command=self.tree.xview)
+        self.vscroll=ttk.Scrollbar(treebox,orient="vertical",command=self.tree.yview,style="Navy.Vertical.TScrollbar")
+        self.hscroll=ttk.Scrollbar(treebox,orient="horizontal",command=self.tree.xview,style="Navy.Horizontal.TScrollbar")
         self.tree.configure(yscrollcommand=self.vscroll.set,xscrollcommand=self.hscroll.set)
         self.tree.grid(row=0,column=0,sticky="nsew")
         self.vscroll.grid(row=0,column=1,sticky="ns")
         self.hscroll.grid(row=1,column=0,sticky="ew")
+        ttk.Frame(treebox,style="ScrollCorner.TFrame").grid(row=1,column=1,sticky="nsew")
         treebox.rowconfigure(0,weight=1);treebox.columnconfigure(0,weight=1)
 
         # 결과 그룹 시각 구분
@@ -225,7 +235,7 @@ class App(tk.Tk):
         self.tree.tag_configure("error",background="#fff1f1")
 
         foot=ttk.Frame(folder_tab,padding=8);foot.pack(fill="x")
-        ttk.Button(foot,text="선택한 두 파일 차이 보기",command=self.diffwin).pack(side="left")
+        ttk.Button(foot,text="선택한 두 파일 차이 보기",command=self.diffwin,style="Primary.TButton").pack(side="left")
 
         # 파일 2개 비교
         pairtop=ttk.Frame(pair_tab,padding=(16,14),style="Card.TFrame");pairtop.pack(fill="x",padx=8,pady=(8,6))
@@ -234,13 +244,13 @@ class App(tk.Tk):
             row=ttk.Frame(pairtop,style="Card.TFrame");row.pack(fill="x",pady=5)
             ttk.Label(row,text=label,width=3,font=("Malgun Gothic",11,"bold"),style="Card.TLabel").pack(side="left")
             ttk.Entry(row,textvariable=self.pair_paths[idx]).pack(side="left",fill="x",expand=True,padx=(0,7))
-            ttk.Button(row,text="파일 선택",command=lambda i=idx:self.pick_pair(i)).pack(side="left")
+            ttk.Button(row,text="파일 선택",command=lambda i=idx:self.pick_pair(i),padding=(14,7)).pack(side="left")
         action=ttk.Frame(pairtop,style="Card.TFrame");action.pack(fill="x",pady=(8,0))
         ttk.Label(action,text="HWP 5.x · HWPX · DOCX · TXT / 서로 다른 형식도 본문 비교 가능",style="CardMuted.TLabel").pack(side="left")
         self.pair_compare_btn=ttk.Button(action,text="두 파일 비교",command=self.compare_pair,style="Primary.TButton");self.pair_compare_btn.pack(side="right")
         ttk.Button(action,text="초기화",command=self.reset_pair).pack(side="right",padx=6)
 
-        self.pair_summary=ttk.Label(pair_tab,text="비교할 파일 두 개를 선택해 주세요.",padding=(12,8),font=("",10,"bold"))
+        self.pair_summary=ttk.Label(pair_tab,text="비교할 파일 두 개를 선택해 주세요.",padding=(12,8),font=("Malgun Gothic",10,"bold"))
         self.pair_summary.pack(fill="x")
         pane=ttk.Panedwindow(pair_tab,orient="horizontal");pane.pack(fill="both",expand=True,padx=8,pady=(0,8))
         self.pair_text=[]; self.pair_headers=[]
@@ -252,8 +262,8 @@ class App(tk.Tk):
             ttk.Label(h,textvariable=hv,style="CardMuted.TLabel").pack(side="left",fill="x",expand=True,padx=(5,0))
             self.pair_headers.append(hv)
             t=tk.Text(f,wrap="word",font=("Malgun Gothic",10),undo=False,relief="flat",bd=0,
-                      background="#ffffff",foreground="#243447",padx=12,pady=10)
-            y=ttk.Scrollbar(f,orient="vertical",command=t.yview);t.configure(yscrollcommand=y.set)
+                      background="#f7f6f2",foreground="#243447",padx=12,pady=10)
+            y=ttk.Scrollbar(f,orient="vertical",command=t.yview,style="Navy.Vertical.TScrollbar");t.configure(yscrollcommand=y.set)
             y.pack(side="right",fill="y");t.pack(fill="both",expand=True)
             self.pair_text.append(t)
         legend=ttk.Frame(pair_tab,padding=(10,4));legend.pack(fill="x")

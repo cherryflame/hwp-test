@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>문서 중복·유사성 검사기 - 실제 구현 UI 미리보기</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f5f7fa;color:#243447;font-family:"Malgun Gothic","Noto Sans KR",sans-serif;font-size:13px}
+.app{width:min(1180px,calc(100vw - 28px));height:760px;margin:18px auto;background:#f5f7fa;border:1px solid #304a68;box-shadow:0 8px 26px #1f29371a;overflow:hidden}
+.titlebar{height:38px;background:#fff;display:flex;align-items:center;padding:0 14px;border-bottom:1px solid #e2e8f0;color:#334155}
+.windowbuttons{margin-left:auto;letter-spacing:18px;color:#64748b}
+.header{height:68px;display:flex;align-items:center;padding:0 18px}
+.header h1{font-size:20px;margin:0;color:#172b4d}
+.note{margin-left:auto;color:#718096;font-size:12px}
+.tabs{display:flex;margin:0 8px;height:40px;align-items:flex-end;border-bottom:1px solid #304a68}
+.tab{height:38px;padding:10px 20px;background:#e9eef5;color:#52606d;border:1px solid transparent}
+.tab.active{background:#fff;color:#245dcc;border:1px solid #304a68;border-bottom-color:#fff}
+.card{background:#fff;margin:8px;border:1px solid #304a68;padding:14px 16px}
+.row{display:grid;grid-template-columns:32px 1fr 72px;gap:8px;align-items:center;margin:7px 0}
+.ab{font-weight:700;color:#172b4d;font-size:14px}
+.input{height:34px;border:1px solid #304a68;background:#fff;padding:8px 10px;color:#475569;overflow:hidden;white-space:nowrap}
+button{height:34px;border:1px solid #304a68;background:#f8fafc;padding:0 13px;color:#334155;font-family:inherit}
+.action{display:flex;align-items:center;margin-top:10px;color:#718096;font-size:12px}
+.primary{margin-left:auto;background:#214f78;color:#fff;border-color:#214f78;font-weight:700}
+.summary{margin:6px 8px;padding:10px 14px;background:#fff;border:1px solid #304a68;color:#52606d}
+.legend{float:right;font-size:12px}
+.dot{display:inline-block;width:10px;height:10px;margin:0 4px 0 12px;border-radius:2px}
+.red{background:#ffd7dc}.green{background:#d8f0dd}.yellow{background:#fff0b8}
+.compare{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 8px}
+.panel{background:#fff;border:1px solid #304a68;min-width:0}
+.panelhead{height:42px;display:flex;align-items:center;padding:0 12px;border-bottom:1px solid #e6ebf1}
+.badge{font-weight:700;color:#172b4d;margin-right:8px}
+.short{color:#718096;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.text{height:335px;padding:14px 18px;background:#f7f6f2;font-size:14px;line-height:1.9;overflow:hidden}
+.changedA{background:#ffd7dc;padding:2px 3px}.changedB{background:#d8f0dd;padding:2px 3px}.modified{background:#fff0b8;padding:2px 3px}
+.footer{margin:8px;color:#718096;font-size:12px}
+.callout{position:fixed;right:24px;bottom:20px;background:#172b4d;color:white;padding:10px 14px;border-radius:4px;box-shadow:0 4px 16px #0003}
+</style>
+</head>
+<body>
+<div class="app">
+ <div class="titlebar">문서 중복·유사성 검사기 <div class="windowbuttons">— □ ×</div></div>
+ <div class="header"><h1>문서 중복·유사성 검사기</h1><div class="note">원본 파일은 읽기만 하며 삭제·이동·수정하지 않습니다.</div></div>
+ <div class="tabs"><div class="tab">폴더 중복 검사</div><div class="tab active">파일 2개 비교</div></div>
+ <div class="card">
+  <div class="row"><div class="ab">A</div><div class="input">D:\원고정리\작품명_최종.hwp</div><button style="white-space:nowrap;border-color:#304a68;background:#fff;color:#17365d">찾아보기</button></div>
+  <div class="row"><div class="ab">B</div><div class="input">D:\원고정리\작품명_수정본.hwp</div><button style="white-space:nowrap;border-color:#304a68;background:#fff;color:#17365d">찾아보기</button></div>
+  <div class="action">HWP 5.x · HWPX · DOCX · TXT / 서로 다른 형식도 본문 비교 가능 <button style="border-color:#304a68;background:#fff;color:#17365d">초기화</button><button class="primary">두 파일 비교</button></div>
+ </div>
+ <div class="summary">
+   유사/상이 · 유사도 94.73% · A 12,418자 / B 12,506자 · 추가 2줄 / 삭제 1줄 / 변경 3줄
+   <span class="legend"><span class="dot red"></span>A만 <span class="dot green"></span>B만 <span class="dot yellow"></span>변경</span>
+ </div>
+ <div class="compare">
+  <div class="panel">
+   <div class="panelhead"><span class="badge">A</span><span class="short">원고정리 / 작품명_최종.hwp</span></div>
+   <div class="text">
+    그는 잠시 말을 멈추고 창밖을 바라보았다.<br>
+    바람이 지나간 자리에 희미한 향이 남았다.<br>
+    마치 오래전의 <span class="modified">약속</span>이 되살아난 것처럼.<br><br>
+    그리고 그는 천천히 고개를 돌려, 말을 이었다.<br>
+    <span class="changedA">“…이제는 다르다.”</span><br><br>
+    그의 목소리는 낮았지만, 단정했다.
+   </div>
+  </div>
+  <div class="panel">
+   <div class="panelhead"><span class="badge">B</span><span class="short">원고정리 / 작품명_수정본.hwp</span></div>
+   <div class="text">
+    그는 잠시 말을 멈추고 창밖을 바라보았다.<br>
+    바람이 지나간 자리에 희미한 향이 남았다.<br>
+    마치 오래전의 <span class="modified">맹세</span>가 되살아난 것처럼.<br><br>
+    그리고 그는 천천히 고개를 돌려, 말을 이었다.<br>
+    <span class="changedB">“…지금은 다르다.”</span><br><br>
+    그의 목소리는 낮았지만, 단호했다.
+   </div>
+  </div>
+ </div>
+ <div class="footer">※ 이 페이지는 현재 Tkinter 구현본의 배치·색·크기·A/B 헤더를 브라우저에서 확인하기 위한 미리보기입니다.</div>
+</div>
+<div class="callout">A/B 제목 옆: 최종 폴더명 / 파일명</div>
+</body>
+</html>
