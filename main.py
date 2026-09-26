@@ -123,6 +123,16 @@ class R:
 class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title(APP); self.geometry("1220x780"); self.minsize(900,600)
+        self._app_icon_image=None
+        try:
+            self.iconbitmap(default=resource_path("app.ico"))
+        except Exception:
+            pass
+        try:
+            self._app_icon_image=tk.PhotoImage(file=resource_path("app_icon.png"))
+            self.iconphoto(True,self._app_icon_image)
+        except Exception:
+            pass
         self.folders=[]; self.records=[]; self.groups=[]; self.q=queue.Queue(); self.running=False
         self.active_filter="전체"; self.result_counts={"전체":0,"완전 동일":0,"내용 동일":0,"유사":0,"읽기 실패":0}
         self.skip_diff_transfer_notice=False
@@ -143,20 +153,20 @@ class App(tk.Tk):
         style.configure("CardMuted.TLabel",background="#ffffff",foreground="#718096")
         style.configure("Title.TLabel",background="#f5f7fa",foreground="#172b4d",font=("Malgun Gothic",16,"bold"))
         style.configure("PanelTitle.TLabel",background="#ffffff",foreground="#172b4d",font=("Malgun Gothic",10,"bold"))
-        style.configure("TButton",padding=(12,7),relief="solid",borderwidth=1,
+        style.configure("TButton",padding=(12,7),relief="flat",borderwidth=1,
                         background="#ffffff",foreground="#17365d",bordercolor="#304a68")
         style.map("TButton",background=[("active","#e7eef8")])
         style.configure("Primary.TButton",background="#214f78",foreground="white",padding=(14,8),
-                        relief="solid",borderwidth=1,bordercolor="#17365d")
+                        relief="flat",borderwidth=1,bordercolor="#17365d")
         style.map("Primary.TButton",background=[("active","#245dcc"),("disabled","#a9b8cf")],foreground=[("disabled","#f5f7fa")])
         style.configure("TNotebook",background="#f5f7fa",borderwidth=0,tabmargins=(0,0,0,0))
         style.configure("TNotebook.Tab",padding=(18,9),background="#e9eef5",foreground="#52606d",borderwidth=0)
         style.map("TNotebook.Tab",background=[("selected","#ffffff")],foreground=[("selected","#245dcc")])
-        style.configure("Treeview",background="#ffffff",fieldbackground="#ffffff",rowheight=27,borderwidth=1,relief="solid",bordercolor="#304a68")
-        style.configure("Treeview.Heading",background="#eef3f8",foreground="#17365d",relief="solid",borderwidth=1,padding=(7,7))
+        style.configure("Treeview",background="#ffffff",fieldbackground="#ffffff",rowheight=27,borderwidth=1,relief="flat",bordercolor="#304a68")
+        style.configure("Treeview.Heading",background="#eef3f8",foreground="#17365d",relief="flat",borderwidth=0,padding=(7,7))
         style.map("Treeview",background=[("selected","#dceaff")],foreground=[("selected","#172b4d")])
         style.configure("TEntry",fieldbackground="#ffffff",padding=7,bordercolor="#304a68")
-        style.configure("TLabelframe",background="#ffffff",borderwidth=1,relief="solid",bordercolor="#304a68")
+        style.configure("TLabelframe",background="#ffffff",borderwidth=1,relief="flat",bordercolor="#304a68")
         style.configure("TLabelframe.Label",background="#ffffff",foreground="#415466",font=("Malgun Gothic",9,"bold"))
         style.configure("Horizontal.TProgressbar",troughcolor="#f7f8fa",background="#214f78",
                         bordercolor="#17365d",lightcolor="#214f78",darkcolor="#214f78",thickness=10)
@@ -252,7 +262,17 @@ class App(tk.Tk):
 
         self.pair_summary=ttk.Label(pair_tab,text="비교할 파일 두 개를 선택해 주세요.",padding=(12,8),font=("Malgun Gothic",10,"bold"))
         self.pair_summary.pack(fill="x")
-        pane=ttk.Panedwindow(pair_tab,orient="horizontal");pane.pack(fill="both",expand=True,padx=8,pady=(0,8))
+
+        self.pair_note=ttk.Label(pair_tab,text="",padding=(10,5),foreground="#6f7b86")
+        self.pair_note.pack(side="bottom",fill="x")
+        legend=ttk.Frame(pair_tab,padding=(10,5))
+        legend.pack(side="bottom",fill="x")
+        ttk.Label(legend,text="차이 표시:").pack(side="left")
+        tk.Label(legend,text=" A에만 있음 ",background="#ffdede").pack(side="left",padx=(6,3))
+        tk.Label(legend,text=" B에만 있음 ",background="#dff3df").pack(side="left",padx=3)
+        tk.Label(legend,text=" 양쪽 내용 변경 ",background="#fff0a8").pack(side="left",padx=3)
+
+        pane=ttk.Panedwindow(pair_tab,orient="horizontal");pane.pack(fill="both",expand=True,padx=8,pady=(0,4))
         self.pair_text=[]; self.pair_headers=[]
         for label in ("A","B"):
             f=ttk.Frame(pane,style="Card.TFrame");pane.add(f,weight=1)
@@ -261,17 +281,12 @@ class App(tk.Tk):
             hv=tk.StringVar(value="")
             ttk.Label(h,textvariable=hv,style="CardMuted.TLabel").pack(side="left",fill="x",expand=True,padx=(5,0))
             self.pair_headers.append(hv)
-            t=tk.Text(f,wrap="word",font=("Malgun Gothic",10),undo=False,relief="flat",bd=0,
-                      background="#f7f6f2",foreground="#243447",padx=12,pady=10)
+            t=tk.Text(f,wrap="word",font=("Malgun Gothic",10),undo=False,relief="flat",bd=1,
+                      background="#f7f6f2",foreground="#243447",padx=12,pady=10,
+                      highlightthickness=1,highlightbackground="#304a68",highlightcolor="#304a68")
             y=ttk.Scrollbar(f,orient="vertical",command=t.yview,style="Navy.Vertical.TScrollbar");t.configure(yscrollcommand=y.set)
             y.pack(side="right",fill="y");t.pack(fill="both",expand=True)
             self.pair_text.append(t)
-        legend=ttk.Frame(pair_tab,padding=(10,4));legend.pack(fill="x")
-        ttk.Label(legend,text="차이 표시:").pack(side="left")
-        tk.Label(legend,text=" A에만 있음 ",background="#ffdede").pack(side="left",padx=(6,3))
-        tk.Label(legend,text=" B에만 있음 ",background="#dff3df").pack(side="left",padx=3)
-        tk.Label(legend,text=" 양쪽 내용 변경 ",background="#fff0a8").pack(side="left",padx=3)
-        self.pair_note=ttk.Label(pair_tab,text="",padding=(10,5),foreground="#6f7b86");self.pair_note.pack(fill="x")
 
     def pick_pair(self,idx):
         p=filedialog.askopenfilename(filetypes=[("지원 문서","*.hwp *.hwpx *.docx *.txt"),("모든 파일","*.*")])
