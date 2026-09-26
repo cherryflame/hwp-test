@@ -7,6 +7,10 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 APP="문서 중복·유사성 검사기"
+
+def resource_path(name):
+    base=getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base,name)
 EXTS={".hwp",".hwpx",".docx",".txt"}
 
 def fhash(p):
@@ -124,10 +128,47 @@ class App(tk.Tk):
         self.skip_diff_transfer_notice=False
         self.pair_compare_seq=0
         self.ui(); self.after(100,self.poll)
+
+    def setup_style(self):
+        self.configure(background="#f5f7fa")
+        style=ttk.Style(self)
+        try: style.theme_use("clam")
+        except tk.TclError: pass
+        style.configure(".",font=("Malgun Gothic",9),background="#f5f7fa",foreground="#243447")
+        style.configure("TFrame",background="#f5f7fa")
+        style.configure("Card.TFrame",background="#ffffff")
+        style.configure("TLabel",background="#f5f7fa",foreground="#243447")
+        style.configure("Card.TLabel",background="#ffffff",foreground="#243447")
+        style.configure("Muted.TLabel",background="#f5f7fa",foreground="#718096")
+        style.configure("CardMuted.TLabel",background="#ffffff",foreground="#718096")
+        style.configure("Title.TLabel",background="#f5f7fa",foreground="#172b4d",font=("Malgun Gothic",16,"bold"))
+        style.configure("PanelTitle.TLabel",background="#ffffff",foreground="#172b4d",font=("Malgun Gothic",10,"bold"))
+        style.configure("TButton",padding=(12,7),relief="flat",borderwidth=0)
+        style.map("TButton",background=[("active","#e7eef8")])
+        style.configure("Primary.TButton",background="#2f6fed",foreground="white",padding=(14,8),borderwidth=0)
+        style.map("Primary.TButton",background=[("active","#245dcc"),("disabled","#a9b8cf")],foreground=[("disabled","#f5f7fa")])
+        style.configure("TNotebook",background="#f5f7fa",borderwidth=0,tabmargins=(0,0,0,0))
+        style.configure("TNotebook.Tab",padding=(18,9),background="#e9eef5",foreground="#52606d",borderwidth=0)
+        style.map("TNotebook.Tab",background=[("selected","#ffffff")],foreground=[("selected","#245dcc")])
+        style.configure("Treeview",background="#ffffff",fieldbackground="#ffffff",rowheight=27,borderwidth=0)
+        style.configure("Treeview.Heading",background="#eef3f8",foreground="#415466",relief="flat",padding=(7,7))
+        style.map("Treeview",background=[("selected","#dceaff")],foreground=[("selected","#172b4d")])
+        style.configure("TEntry",fieldbackground="#ffffff",padding=7)
+        style.configure("TLabelframe",background="#ffffff",borderwidth=1,relief="solid")
+        style.configure("TLabelframe.Label",background="#ffffff",foreground="#415466",font=("Malgun Gothic",9,"bold"))
+
+    @staticmethod
+    def short_path(p):
+        if not p:return ""
+        q=Path(p)
+        parent=q.parent.name
+        return f"{parent} / {q.name}" if parent else q.name
+
     def ui(self):
-        head=ttk.Frame(self,padding=10);head.pack(fill="x")
-        ttk.Label(head,text=APP,font=("",15,"bold")).pack(side="left")
-        ttk.Label(head,text="원본 파일은 읽기만 하며 삭제·이동·수정하지 않습니다.",foreground="#6f7b86").pack(side="right")
+        self.setup_style()
+        head=ttk.Frame(self,padding=(18,14,18,10));head.pack(fill="x")
+        ttk.Label(head,text=APP,style="Title.TLabel").pack(side="left")
+        ttk.Label(head,text="원본 파일은 읽기만 하며 삭제·이동·수정하지 않습니다.",style="Muted.TLabel").pack(side="right")
 
         self.tabs=ttk.Notebook(self);self.tabs.pack(fill="both",expand=True,padx=10,pady=(0,10))
         folder_tab=ttk.Frame(self.tabs);pair_tab=ttk.Frame(self.tabs)
@@ -187,26 +228,31 @@ class App(tk.Tk):
         ttk.Button(foot,text="선택한 두 파일 차이 보기",command=self.diffwin).pack(side="left")
 
         # 파일 2개 비교
-        pairtop=ttk.Frame(pair_tab,padding=12);pairtop.pack(fill="x")
+        pairtop=ttk.Frame(pair_tab,padding=(16,14),style="Card.TFrame");pairtop.pack(fill="x",padx=8,pady=(8,6))
         self.pair_paths=[tk.StringVar(),tk.StringVar()]
         for idx,label in enumerate(("A","B")):
-            row=ttk.Frame(pairtop);row.pack(fill="x",pady=5)
-            ttk.Label(row,text=label,width=3,font=("",11,"bold")).pack(side="left")
+            row=ttk.Frame(pairtop,style="Card.TFrame");row.pack(fill="x",pady=5)
+            ttk.Label(row,text=label,width=3,font=("Malgun Gothic",11,"bold"),style="Card.TLabel").pack(side="left")
             ttk.Entry(row,textvariable=self.pair_paths[idx]).pack(side="left",fill="x",expand=True,padx=(0,7))
             ttk.Button(row,text="파일 선택",command=lambda i=idx:self.pick_pair(i)).pack(side="left")
-        action=ttk.Frame(pairtop);action.pack(fill="x",pady=(8,0))
-        ttk.Label(action,text="HWP 5.x · HWPX · DOCX · TXT / 서로 다른 형식도 본문 비교 가능",foreground="#6f7b86").pack(side="left")
-        self.pair_compare_btn=ttk.Button(action,text="두 파일 비교",command=self.compare_pair);self.pair_compare_btn.pack(side="right")
+        action=ttk.Frame(pairtop,style="Card.TFrame");action.pack(fill="x",pady=(8,0))
+        ttk.Label(action,text="HWP 5.x · HWPX · DOCX · TXT / 서로 다른 형식도 본문 비교 가능",style="CardMuted.TLabel").pack(side="left")
+        self.pair_compare_btn=ttk.Button(action,text="두 파일 비교",command=self.compare_pair,style="Primary.TButton");self.pair_compare_btn.pack(side="right")
         ttk.Button(action,text="초기화",command=self.reset_pair).pack(side="right",padx=6)
 
         self.pair_summary=ttk.Label(pair_tab,text="비교할 파일 두 개를 선택해 주세요.",padding=(12,8),font=("",10,"bold"))
         self.pair_summary.pack(fill="x")
         pane=ttk.Panedwindow(pair_tab,orient="horizontal");pane.pack(fill="both",expand=True,padx=8,pady=(0,8))
-        self.pair_text=[]
+        self.pair_text=[]; self.pair_headers=[]
         for label in ("A","B"):
-            f=ttk.Frame(pane);pane.add(f,weight=1)
-            h=ttk.Label(f,text=label,padding=7,font=("",10,"bold"));h.pack(fill="x")
-            t=tk.Text(f,wrap="word",font=("Malgun Gothic",10),undo=False)
+            f=ttk.Frame(pane,style="Card.TFrame");pane.add(f,weight=1)
+            h=ttk.Frame(f,style="Card.TFrame",padding=(10,8));h.pack(fill="x")
+            ttk.Label(h,text=label,width=2,font=("Malgun Gothic",10,"bold"),style="PanelTitle.TLabel").pack(side="left")
+            hv=tk.StringVar(value="")
+            ttk.Label(h,textvariable=hv,style="CardMuted.TLabel").pack(side="left",fill="x",expand=True,padx=(5,0))
+            self.pair_headers.append(hv)
+            t=tk.Text(f,wrap="word",font=("Malgun Gothic",10),undo=False,relief="flat",bd=0,
+                      background="#ffffff",foreground="#243447",padx=12,pady=10)
             y=ttk.Scrollbar(f,orient="vertical",command=t.yview);t.configure(yscrollcommand=y.set)
             y.pack(side="right",fill="y");t.pack(fill="both",expand=True)
             self.pair_text.append(t)
@@ -219,10 +265,13 @@ class App(tk.Tk):
 
     def pick_pair(self,idx):
         p=filedialog.askopenfilename(filetypes=[("지원 문서","*.hwp *.hwpx *.docx *.txt"),("모든 파일","*.*")])
-        if p:self.pair_paths[idx].set(p)
+        if p:
+            self.pair_paths[idx].set(p)
+            self.pair_headers[idx].set(self.short_path(p))
 
     def reset_pair(self):
         for v in self.pair_paths:v.set("")
+        for v in self.pair_headers:v.set("")
         self.pair_summary["text"]="비교할 파일 두 개를 선택해 주세요."
         self.pair_note["text"]=""
         for t in self.pair_text:
@@ -233,6 +282,8 @@ class App(tk.Tk):
     def compare_pair(self):
         a,b=[x.get().strip() for x in self.pair_paths]
         if not a or not b:return messagebox.showinfo(APP,"A와 B 파일을 모두 선택해 주세요.")
+        self.pair_headers[0].set(self.short_path(a))
+        self.pair_headers[1].set(self.short_path(b))
         self.pair_compare_btn["state"]="disabled"
         self.pair_summary["text"]="두 파일을 읽고 비교하는 중입니다…"
         for t in self.pair_text:
@@ -527,6 +578,8 @@ class App(tk.Tk):
         self.reset_pair()
         self.pair_paths[0].set(a.path)
         self.pair_paths[1].set(b.path)
+        self.pair_headers[0].set(self.short_path(a.path))
+        self.pair_headers[1].set(self.short_path(b.path))
         self.tabs.select(self.pair_tab)
         self.update_idletasks()
         self.compare_pair()
