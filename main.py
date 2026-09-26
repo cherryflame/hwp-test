@@ -121,6 +121,8 @@ class App(tk.Tk):
         super().__init__(); self.title(APP); self.geometry("1220x780"); self.minsize(900,600)
         self.folders=[]; self.records=[]; self.groups=[]; self.q=queue.Queue(); self.running=False
         self.active_filter="전체"; self.result_counts={"전체":0,"완전 동일":0,"내용 동일":0,"유사":0,"읽기 실패":0}
+        self.skip_diff_transfer_notice=False
+        self.pair_compare_seq=0
         self.ui(); self.after(100,self.poll)
     def ui(self):
         head=ttk.Frame(self,padding=10);head.pack(fill="x")
@@ -129,6 +131,7 @@ class App(tk.Tk):
 
         self.tabs=ttk.Notebook(self);self.tabs.pack(fill="both",expand=True,padx=10,pady=(0,10))
         folder_tab=ttk.Frame(self.tabs);pair_tab=ttk.Frame(self.tabs)
+        self.folder_tab=folder_tab; self.pair_tab=pair_tab
         self.tabs.add(folder_tab,text="  폴더 중복 검사  ")
         self.tabs.add(pair_tab,text="  파일 2개 비교  ")
 
@@ -234,9 +237,11 @@ class App(tk.Tk):
         self.pair_summary["text"]="두 파일을 읽고 비교하는 중입니다…"
         for t in self.pair_text:
             t.configure(state="normal");t.delete("1.0","end");t.configure(state="disabled")
-        threading.Thread(target=self._compare_pair_worker,args=(a,b),daemon=True).start()
+        self.pair_compare_seq+=1
+        seq=self.pair_compare_seq
+        threading.Thread(target=self._compare_pair_worker,args=(a,b,seq),daemon=True).start()
 
-    def _compare_pair_worker(self,a,b):
+    def _compare_pair_worker(self,a,b,seq):
         try:
             ra,rb=R(a),R(b)
             for r in (ra,rb):
@@ -255,8 +260,8 @@ class App(tk.Tk):
                 if tag=="insert":added+=j2-j1
                 elif tag=="delete":removed+=i2-i1
                 elif tag=="replace":changed+=max(i2-i1,j2-j1)
-            self.q.put(("pairdone",ra,rb,sim,judge,added,removed,changed,ops,la,lb))
-        except Exception as e:self.q.put(("pairfatal",str(e)))
+            self.q.put(("pairdone",seq,ra,rb,sim,judge,added,removed,changed,ops,la,lb))
+        except Exception as e:self.q.put(("pairfatal",seq,str(e)))
 
     def finish_pair(self,ra,rb,sim,judge,added,removed,changed,ops,la,lb):
         self.pair_result=(ra,rb)
@@ -410,11 +415,13 @@ class App(tk.Tk):
                 elif m[0]=="p":self.pb["value"]=m[1];self.status["text"]=m[2]
                 elif m[0]=="phase":self.status["text"]=m[1]
                 elif m[0]=="done":self.render()
-                elif m[0]=="pairdone":self.finish_pair(*m[1:])
+                elif m[0]=="pairdone":
+                    if m[1]==self.pair_compare_seq:self.finish_pair(*m[2:])
                 elif m[0]=="pairfatal":
-                    self.pair_compare_btn["state"]="normal"
-                    self.pair_summary["text"]="비교에 실패했습니다."
-                    messagebox.showerror(APP,"비교하지 못했습니다.\n\n"+m[1])
+                    if m[1]==self.pair_compare_seq:
+                        self.pair_compare_btn["state"]="normal"
+                        self.pair_summary["text"]="비교에 실패했습니다."
+                        messagebox.showerror(APP,"비교하지 못했습니다.\n\n"+m[2])
                 elif m[0]=="fatal":self.running=False;self.start["state"]="normal";messagebox.showerror(APP,m[1])
         except queue.Empty:pass
         self.after(100,self.poll)
@@ -479,13 +486,50 @@ class App(tk.Tk):
     def diffwin(self):
         rs=self.selected()
         if len(rs)!=2:return messagebox.showinfo(APP,"파일 두 개를 Ctrl+클릭으로 선택해 주세요.")
-        a,b=rs;w=tk.Toplevel(self);w.title("문서 차이 보기");w.geometry("1100x700")
-        t=tk.Text(w,wrap="none",font=("Consolas",10));t.pack(fill="both",expand=True)
-        ca,cb=compact(a.text),compact(b.text)
-        sim=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio()*100 if len(ca)+len(cb)<600000 else jac(shingles(ca),shingles(cb))*100
-        t.insert("end",f"유사도: {sim:.2f}%\nA: {a.path}\nB: {b.path}\n\n")
-        d="\n".join(difflib.unified_diff(norm(a.text).splitlines(),norm(b.text).splitlines(),fromfile=a.name,tofile=b.name,lineterm="",n=3))
-        t.insert("end",d or "정규화한 본문 내용이 동일합니다.")
+        if str(self.pair_compare_btn["state"])=="disabled":
+            return messagebox.showinfo(APP,"현재 파일 비교가 진행 중입니다. 완료된 뒤 다시 시도해 주세요.")
+        a,b=rs
+        if self.skip_diff_transfer_notice:
+            return self.transfer_to_pair(a,b)
+        self.diff_transfer_notice(a,b)
+
+    def diff_transfer_notice(self,a,b):
+        w=tk.Toplevel(self)
+        w.title("파일 2개 비교")
+        w.resizable(False,False)
+        w.transient(self)
+        w.grab_set()
+        body=ttk.Frame(w,padding=(22,18,22,8));body.pack(fill="both",expand=True)
+        ttk.Label(body,text="선택한 두 파일을 ‘파일 2개 비교’ 탭에서 비교합니다.",
+                  font=("",10,"bold")).pack(anchor="w")
+        ttk.Label(body,text="기존에 비교하던 파일과 결과가 있다면 새 파일로 교체됩니다.",
+                  foreground="#5f6f7a").pack(anchor="w",pady=(7,14))
+        skip=tk.BooleanVar(value=False)
+        ttk.Checkbutton(body,text="이번 실행 중에는 다시 보지 않기",variable=skip).pack(anchor="w")
+        buttons=ttk.Frame(w,padding=(22,8,22,18));buttons.pack(fill="x")
+        def cancel():
+            w.destroy()
+        def proceed():
+            if skip.get():self.skip_diff_transfer_notice=True
+            w.destroy()
+            self.transfer_to_pair(a,b)
+        ttk.Button(buttons,text="취소",command=cancel).pack(side="right")
+        ttk.Button(buttons,text="비교하기",command=proceed).pack(side="right",padx=(0,7))
+        w.protocol("WM_DELETE_WINDOW",cancel)
+        w.update_idletasks()
+        x=self.winfo_rootx()+(self.winfo_width()-w.winfo_width())//2
+        y=self.winfo_rooty()+(self.winfo_height()-w.winfo_height())//2
+        w.geometry(f"+{max(0,x)}+{max(0,y)}")
+        w.focus_set()
+
+    def transfer_to_pair(self,a,b):
+        # 폴더 검사 결과는 그대로 두고 비교 탭의 A/B와 결과만 새 선택으로 교체한다.
+        self.reset_pair()
+        self.pair_paths[0].set(a.path)
+        self.pair_paths[1].set(b.path)
+        self.tabs.select(self.pair_tab)
+        self.update_idletasks()
+        self.compare_pair()
     def csv(self):
         p=filedialog.asksaveasfilename(defaultextension=".csv",filetypes=[("CSV","*.csv")],initialfile="문서_중복_유사본_결과.csv")
         if not p:return
