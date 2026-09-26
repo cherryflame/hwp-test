@@ -189,7 +189,7 @@ class App(tk.Tk):
         return tk.Button(parent,text=text,command=command,state=state,
                          font=("Malgun Gothic",9),fg="#17365d",bg="#ffffff",
                          activeforeground="#17365d",activebackground="#eef4fa",
-                         disabledforeground="#9aa4ae",disabledbackground="#ffffff",
+                         disabledforeground="#9aa4ae",
                          relief="solid",bd=1,highlightthickness=0,
                          padx=13,pady=5,cursor="arrow")
 
