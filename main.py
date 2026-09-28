@@ -2,17 +2,16 @@
 import os, sys, re, csv, time, queue, hashlib, zipfile, difflib, threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from urllib.parse import unquote
 from collections import defaultdict
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP="문서 중복·유사성 검사기 — EPUB 지원판"
+APP="문서 중복·유사성 검사기"
 
 def resource_path(name):
     base=getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base,name)
-EXTS={".hwp",".hwpx",".docx",".txt",".epub"}
+EXTS={".hwp",".hwpx",".docx",".txt"}
 
 def fhash(p):
     h=hashlib.sha256()
@@ -54,77 +53,6 @@ def read_hwpx(p):
         for n in sec: out.append(xmltext(z.read(n)))
     return "\n".join(out),"HWPX"
 
-def _epub_local(tag):
-    return tag.split("}")[-1].lower()
-
-def _epub_html_text(data):
-    root=ET.fromstring(data)
-    out=[]
-    block_tags={"p","div","section","article","header","footer","aside","nav","blockquote","pre","li","dt","dd","h1","h2","h3","h4","h5","h6","tr"}
-    skip_tags={"script","style","svg","head"}
-    def walk(e):
-        tag=_epub_local(e.tag)
-        if tag in skip_tags:return
-        if tag in block_tags and out and not out[-1].endswith("\n"):out.append("\n")
-        if e.text:out.append(e.text)
-        for c in e:
-            ctag=_epub_local(c.tag)
-            if ctag=="br":out.append("\n")
-            else:walk(c)
-            if c.tail:out.append(c.tail)
-        if tag in block_tags and (not out or not out[-1].endswith("\n")):out.append("\n")
-    body=None
-    for e in root.iter():
-        if _epub_local(e.tag)=="body":body=e;break
-    walk(body if body is not None else root)
-    return "".join(out)
-
-def read_epub(p):
-    """EPUB container.xml -> OPF -> spine 순서로 선형 본문을 추출한다."""
-    with zipfile.ZipFile(p) as z:
-        try:
-            container=ET.fromstring(z.read("META-INF/container.xml"))
-        except KeyError:
-            raise RuntimeError("EPUB container.xml이 없습니다.")
-        rootfile=None
-        for e in container.iter():
-            if _epub_local(e.tag)=="rootfile":
-                rootfile=e.attrib.get("full-path")
-                if rootfile: rootfile=unquote(rootfile)
-                if rootfile:break
-        if not rootfile:raise RuntimeError("EPUB OPF 경로를 찾지 못했습니다.")
-        try:opf=ET.fromstring(z.read(rootfile))
-        except KeyError:raise RuntimeError("EPUB OPF 파일을 찾지 못했습니다.")
-        manifest={}
-        for e in opf.iter():
-            if _epub_local(e.tag)=="item":
-                iid=e.attrib.get("id");href=e.attrib.get("href")
-                if iid and href:manifest[iid]=(href,e.attrib.get("media-type","").lower(),e.attrib.get("properties",""))
-        spine=[]
-        for e in opf.iter():
-            if _epub_local(e.tag)=="itemref":
-                iid=e.attrib.get("idref")
-                if iid:spine.append(iid)
-        base=Path(rootfile).parent
-        out=[]
-        for iid in spine:
-            item=manifest.get(iid)
-            if not item:continue
-            href,media,props=item
-            if "html" not in media and not href.lower().endswith((".xhtml",".html",".htm")):continue
-            # nav 전용 문서는 일반적으로 본문 spine에 없지만, 포함된 경우 중복 목차를 피한다.
-            if "nav" in props.split():continue
-            name=(base / unquote(href.split("#",1)[0].split("?",1)[0])).as_posix()
-            try:data=z.read(name)
-            except KeyError:continue
-            try:t=_epub_html_text(data)
-            except ET.ParseError:
-                # 드문 비정상 HTML은 텍스트 손실보다 읽기 실패가 안전하다.
-                raise RuntimeError(f"EPUB XHTML 파싱 실패: {name}")
-            if t.strip():out.append(t)
-        if not out:raise RuntimeError("EPUB spine에서 읽을 본문을 찾지 못했습니다.")
-        return "\n".join(out),"EPUB"
-
 def read_hwp(p):
     # 검증된 syhwp를 사용. 버전 차이에 대비해 공개 API 후보를 순차 시도.
     import syhwp
@@ -165,7 +93,6 @@ def read_text(p):
     if e==".docx":return read_docx(p)
     if e==".hwpx":return read_hwpx(p)
     if e==".hwp":return read_hwp(p)
-    if e==".epub":return read_epub(p)
     raise RuntimeError("지원하지 않는 형식")
 
 def norm(s):
@@ -173,6 +100,9 @@ def norm(s):
     s=re.sub(r"[ \t]+"," ",s); s=re.sub(r" *\n *","\n",s); s=re.sub(r"\n{3,}","\n\n",s)
     return s.strip()
 def compact(s):return re.sub(r"\s+","",norm(s))
+def pair_norm(s):
+    """A/B 상세 비교용. 줄바꿈과 공백 자체를 실제 차이로 보존한다."""
+    return s.replace("\r\n","\n").replace("\r","\n").replace("\u00a0"," ")
 def display_safe(s):
     if not isinstance(s,str): return str(s)
     # Tk/Windows 표시용: 고립 surrogate만 대체문자로 바꾸고 정상 한글/유니코드는 보존.
@@ -186,14 +116,10 @@ def shingles(s,k=9,limit=5000):
     if len(s)<=k:return {s} if s else set()
     step=max(1,(len(s)-k+1)//limit)
     return {s[i:i+k] for i in range(0,len(s)-k+1,step)}
-def word_shingles(s,k=5,limit=1200):
-    # EPUB처럼 서식 마크업 유무로 문자 위치가 조금씩 밀리는 교차 형식 비교용.
-    # 단어 자체를 기준으로 잡아 HTML 태그/강조표현 차이에 덜 민감하다.
-    words=re.findall(r"[^\W_]+",norm(s),flags=re.UNICODE)
-    if len(words)<=k:return {"\x1f".join(words)} if words else set()
-    total=len(words)-k+1;step=max(1,total//limit)
-    return {"\x1f".join(words[i:i+k]) for i in range(0,total,step)}
-
+def raw_shingles(s,k=9,limit=5000):
+    if len(s)<=k:return {s} if s else set()
+    step=max(1,(len(s)-k+1)//limit)
+    return {s[i:i+k] for i in range(0,len(s)-k+1,step)}
 def jac(a,b):return len(a&b)/len(a|b) if a and b else (1 if not a and not b else 0)
 
 class R:
@@ -354,12 +280,19 @@ class App(tk.Tk):
             ttk.Entry(row,textvariable=self.pair_paths[idx]).pack(side="left",fill="x",expand=True,padx=(0,7))
             self.secondary_button(row,"파일 선택",lambda i=idx:self.pick_pair(i)).pack(side="left")
         action=ttk.Frame(pairtop,style="Card.TFrame");action.pack(fill="x",pady=(8,0))
-        ttk.Label(action,text="HWP 5.x · HWPX · DOCX · TXT · EPUB / 서로 다른 형식도 본문 비교 가능",style="CardMuted.TLabel").pack(side="left")
+        ttk.Label(action,text="HWP 5.x · HWPX · DOCX · TXT / 서로 다른 형식도 본문 비교 가능",style="CardMuted.TLabel").pack(side="left")
         self.pair_compare_btn=ttk.Button(action,text="두 파일 비교",command=self.compare_pair,style="Primary.TButton");self.pair_compare_btn.pack(side="right")
         self.secondary_button(action,"초기화",self.reset_pair).pack(side="right",padx=(18,8))
 
         self.pair_summary=ttk.Label(pair_tab,text="비교할 파일 두 개를 선택해 주세요.",padding=(12,8),font=("Malgun Gothic",10,"bold"))
         self.pair_summary.pack(fill="x")
+        pairprog=ttk.Frame(pair_tab,padding=(12,0,12,7))
+        pairprog.pack(fill="x")
+        self.pair_progress=tk.DoubleVar(value=0)
+        self.pair_progress_bar=ttk.Progressbar(pairprog,maximum=100,variable=self.pair_progress,style="Horizontal.TProgressbar")
+        self.pair_progress_bar.pack(side="left",fill="x",expand=True)
+        self.pair_progress_text=ttk.Label(pairprog,text="",width=28,anchor="e",foreground="#6f7b86")
+        self.pair_progress_text.pack(side="right",padx=(10,0))
 
         self.pair_note=ttk.Label(pair_tab,text="",padding=(10,5),foreground="#6f7b86")
         self.pair_note.pack(side="bottom",fill="x")
@@ -387,7 +320,7 @@ class App(tk.Tk):
             self.pair_text.append(t)
 
     def pick_pair(self,idx):
-        p=filedialog.askopenfilename(filetypes=[("지원 문서","*.hwp *.hwpx *.docx *.txt *.epub"),("모든 파일","*.*")])
+        p=filedialog.askopenfilename(filetypes=[("지원 문서","*.hwp *.hwpx *.docx *.txt"),("모든 파일","*.*")])
         if p:
             self.pair_paths[idx].set(p)
             self.pair_headers[idx].set(self.short_path(p))
@@ -396,6 +329,7 @@ class App(tk.Tk):
         for v in self.pair_paths:v.set("")
         for v in self.pair_headers:v.set("")
         self.pair_summary["text"]="비교할 파일 두 개를 선택해 주세요."
+        self.pair_progress.set(0); self.pair_progress_text["text"]=""
         self.pair_note["text"]=""
         for t in self.pair_text:
             t.configure(state="normal");t.delete("1.0","end");t.configure(state="disabled")
@@ -409,44 +343,71 @@ class App(tk.Tk):
         self.pair_headers[1].set(self.short_path(b))
         self.pair_compare_btn["state"]="disabled"
         self.pair_summary["text"]="두 파일을 읽고 비교하는 중입니다…"
+        self.pair_progress.set(0); self.pair_progress_text["text"]="준비 중 · 0%"
         for t in self.pair_text:
             t.configure(state="normal");t.delete("1.0","end");t.configure(state="disabled")
         self.pair_compare_seq+=1
         seq=self.pair_compare_seq
         threading.Thread(target=self._compare_pair_worker,args=(a,b,seq),daemon=True).start()
 
+    def _pair_progress(self,seq,value,label):
+        self.q.put(("pairprogress",seq,value,label))
+
     def _compare_pair_worker(self,a,b,seq):
         try:
-            ra,rb=R(a),R(b)
-            for r in (ra,rb):
-                r.hash=fhash(r.path);r.text,r.kind=read_text(r.path);r.th=thash(r.text)
-            ca,cb=compact(ra.text),compact(rb.text)
-            exact=ra.hash==rb.hash; content=ra.th==rb.th
+            self._pair_progress(seq,5,"A 파일 확인 중")
+            ra=R(a); ra.hash=fhash(ra.path)
+            self._pair_progress(seq,15,"A 본문 추출 중")
+            ra.text,ra.kind=read_text(ra.path); ra.th=thash(ra.text)
+
+            self._pair_progress(seq,30,"B 파일 확인 중")
+            rb=R(b); rb.hash=fhash(rb.path)
+            self._pair_progress(seq,40,"B 본문 추출 중")
+            rb.text,rb.kind=read_text(rb.path); rb.th=thash(rb.text)
+
+            # A/B 직접 비교에서는 저장된 줄바꿈/띄어쓰기 역시 실제 차이로 본다.
+            # 단, Windows/Unix 개행 코드(CRLF/LF) 차이 자체는 같은 줄바꿈으로 정규화한다.
+            ca,cb=pair_norm(ra.text),pair_norm(rb.text)
+            exact=ra.hash==rb.hash
+            content=ca==cb
+            self._pair_progress(seq,55,"유사도 계산 중")
             if exact:sim=1.0;judge="완전 동일"
             elif content:sim=1.0;judge="내용 동일"
-            elif len(ca)+len(cb)<600000:sim=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio();judge="유사/상이"
-            else:sim=jac(shingles(ca),shingles(cb));judge="유사/상이"
-            la,lb=norm(ra.text).splitlines(),norm(rb.text).splitlines()
-            sm=difflib.SequenceMatcher(None,la,lb,autojunk=False)
+            elif len(ca)+len(cb)<600000:
+                sim=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio();judge="유사/상이"
+            else:
+                # 대용량은 기존 후보 계산과 같은 경량 방식으로 근사하되 공백도 토큰에 남긴다.
+                sim=jac(raw_shingles(ca),raw_shingles(cb));judge="유사/상이"
+
+            self._pair_progress(seq,72,"본문 차이 계산 중")
+            sm=difflib.SequenceMatcher(None,ca,cb,autojunk=False)
             ops=sm.get_opcodes()
             added=removed=changed=0
             for tag,i1,i2,j1,j2 in ops:
-                if tag=="insert":added+=j2-j1
-                elif tag=="delete":removed+=i2-i1
-                elif tag=="replace":changed+=max(i2-i1,j2-j1)
-            self.q.put(("pairdone",seq,ra,rb,sim,judge,added,removed,changed,ops,la,lb))
+                if tag=="insert":added+=1
+                elif tag=="delete":removed+=1
+                elif tag=="replace":changed+=1
+            self._pair_progress(seq,92,"결과 정리 중")
+            self.q.put(("pairdone",seq,ra,rb,sim,judge,added,removed,changed,ops,ca,cb))
         except Exception as e:self.q.put(("pairfatal",seq,str(e)))
 
-    def finish_pair(self,ra,rb,sim,judge,added,removed,changed,ops,la,lb):
+    def finish_pair(self,ra,rb,sim,judge,added,removed,changed,ops,ca,cb):
         self.pair_result=(ra,rb)
         self.pair_summary["text"]=(f"{judge}  ·  유사도 {sim*100:.2f}%  ·  "
-            f"A {len(compact(ra.text)):,}자 / B {len(compact(rb.text)):,}자  ·  "
-            f"추가 {added}줄 / 삭제 {removed}줄 / 변경 {changed}줄")
-        self.show_side_diff_lines(ops,la,lb)
-        self.pair_note["text"]=f"A: {ra.kind} · {self.sz(ra.size)}     B: {rb.kind} · {self.sz(rb.size)}"
+            f"A {len(ca):,}자 / B {len(cb):,}자  ·  "
+            f"추가 {added}곳 / 삭제 {removed}곳 / 변경 {changed}곳")
+        self.show_side_diff_chars(ops,ca,cb)
+        self.pair_note["text"]=(f"A: {ra.kind} · {self.sz(ra.size)}     B: {rb.kind} · {self.sz(rb.size)}  ·  "
+            "변경된 줄바꿈은 ↵ 기호로 표시")
+        self.pair_progress.set(100); self.pair_progress_text["text"]="완료 · 100%"
         self.pair_compare_btn["state"]="normal"
 
-    def show_side_diff_lines(self,ops,la,lb):
+    @staticmethod
+    def _visible_changed_text(text):
+        # 바뀐 줄바꿈은 배경색만으로 보이지 않으므로 ↵ + 실제 개행으로 표시한다.
+        return text.replace("\n","↵\n")
+
+    def show_side_diff_chars(self,ops,ca,cb):
         ta,tb=self.pair_text
         for t in (ta,tb):
             t.configure(state="normal");t.delete("1.0","end")
@@ -455,12 +416,16 @@ class App(tk.Tk):
             t.tag_configure("add",background="#dff3df")
             t.tag_configure("chg",background="#fff0a8")
         for tag,i1,i2,j1,j2 in ops:
-            taga=tagb="same"
-            if tag=="delete":taga="del"
-            elif tag=="insert":tagb="add"
-            elif tag=="replace":taga=tagb="chg"
-            for line in la[i1:i2]:ta.insert("end",line+"\n",taga)
-            for line in lb[j1:j2]:tb.insert("end",line+"\n",tagb)
+            aa,bb=ca[i1:i2],cb[j1:j2]
+            if tag=="equal":
+                ta.insert("end",aa,"same"); tb.insert("end",bb,"same")
+            elif tag=="delete":
+                ta.insert("end",self._visible_changed_text(aa),"del")
+            elif tag=="insert":
+                tb.insert("end",self._visible_changed_text(bb),"add")
+            else: # replace: 실제로 바뀐 문자/공백/줄바꿈 구간만 노랑
+                ta.insert("end",self._visible_changed_text(aa),"chg")
+                tb.insert("end",self._visible_changed_text(bb),"chg")
         for t in (ta,tb):t.configure(state="disabled")
 
     def show_side_diff(self,a,b,sm):
@@ -530,31 +495,19 @@ class App(tk.Tk):
             # 모든 파일쌍을 직접 비교하지 않는다.
             # 각 문서의 제한된 9글자 조각을 역색인하여 실제로 본문 일부를 공유하는 파일만 후보로 만든다.
             self.q.put(("phase",f"유사 문서 후보를 만드는 중 · {len(valid)}개 문서"))
-            inv=defaultdict(list); winv=defaultdict(list); sigs=[]; wsigs=[]; lengths=[]
+            inv=defaultdict(list); sigs=[]; lengths=[]
             for idx,r in enumerate(valid):
                 c=compact(r.text); lengths.append(len(c))
                 sg=shingles(c,k=9,limit=1200); sigs.append(sg)
-                wg=word_shingles(r.text,k=5,limit=1200); wsigs.append(wg)
+                # 지나치게 흔한 짧은 조각의 영향 감소를 위해 문서당 최대 1200개
                 for token in sg: inv[token].append(idx)
-                for token in wg: winv[token].append(idx)
 
-            # 기존 v15의 문자-shingle 후보 생성은 그대로 유지한다.
             pair_hits=defaultdict(int)
             for ids in inv.values():
                 if len(ids)>80: continue  # 거의 모든 문서에 나오는 상투 조각은 후보 생성에서 제외
                 for x in range(len(ids)):
                     for y in range(x+1,len(ids)):
                         i,j=ids[x],ids[y]
-                        if lengths[i] and lengths[j] and min(lengths[i],lengths[j])/max(lengths[i],lengths[j])>=.70:
-                            pair_hits[(i,j)]+=1
-            # EPUB이 낀 교차 형식 비교에만 단어-shingle 후보 신호를 보강한다.
-            # EPUB이 없는 기존 문서쌍의 후보/판정 동작은 v15와 동일하게 유지한다.
-            for ids in winv.values():
-                if len(ids)>80: continue
-                for x in range(len(ids)):
-                    for y in range(x+1,len(ids)):
-                        i,j=ids[x],ids[y]
-                        if valid[i].ext != ".epub" and valid[j].ext != ".epub": continue
                         if lengths[i] and lengths[j] and min(lengths[i],lengths[j])/max(lengths[i],lengths[j])>=.70:
                             pair_hits[(i,j)]+=1
 
@@ -570,7 +523,6 @@ class App(tk.Tk):
             for n,(i,j) in enumerate(candidates,1):
                 a,b=valid[i],valid[j]
                 rough=jac(sigs[i],sigs[j])
-                if a.ext==".epub" or b.ext==".epub": rough=max(rough,jac(wsigs[i],wsigs[j]))
                 if rough<max(.30,cut-.40):continue
                 ca,cb=compact(a.text),compact(b.text)
                 if len(ca)+len(cb)<600000:
@@ -602,11 +554,15 @@ class App(tk.Tk):
                 elif m[0]=="p":self.pb["value"]=m[1];self.status["text"]=m[2]
                 elif m[0]=="phase":self.status["text"]=m[1]
                 elif m[0]=="done":self.render()
+                elif m[0]=="pairprogress":
+                    if m[1]==self.pair_compare_seq:
+                        self.pair_progress.set(m[2]); self.pair_progress_text["text"]=f"{m[3]} · {m[2]}%"
                 elif m[0]=="pairdone":
                     if m[1]==self.pair_compare_seq:self.finish_pair(*m[2:])
                 elif m[0]=="pairfatal":
                     if m[1]==self.pair_compare_seq:
                         self.pair_compare_btn["state"]="normal"
+                        self.pair_progress_text["text"]="비교 실패"
                         self.pair_summary["text"]="비교에 실패했습니다."
                         messagebox.showerror(APP,"비교하지 못했습니다.\n\n"+m[2])
                 elif m[0]=="fatal":self.running=False;self.start["state"]="normal";messagebox.showerror(APP,m[1])
