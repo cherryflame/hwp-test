@@ -1,14 +1,16 @@
 문서 중복·유사성 검사기 기본판 — 검증 메모
 
-기준: document_finder_v15.zip
+기준: v20 폰트/진행률 수정본 + v15 비교 엔진 기준 검토
 변경 범위:
-1) 파일 2개 비교 단계 기반 진행률 표시
-2) 줄 단위 전체 색칠 대신 문자 단위 상세 diff
-   - 성능 보완: 전체 문자의 SequenceMatcher 제거
-   - 줄 단위 1차 탐색 후 replace 블록에만 문자 단위 SequenceMatcher 적용
+1) 파일 2개 비교 단계 기반 진행률 표시 유지
+2) 상세 diff 성능 재설계
+   - 실제 내용 변경: v15처럼 줄/변경 블록 전체 표시
+   - 실제 글자는 같고 공백/개행만 다름: 해당 whitespace 위치만 선형 정밀 표시
+   - whitespace-only 구간에는 문자 단위 SequenceMatcher를 사용하지 않음
+   - 문서 전체가 whitespace-only 차이면 줄 단위 SequenceMatcher도 생략
 3) 변경된 줄바꿈은 ↵로 가시화
-4) A/B 직접 비교에서는 저장된 공백/줄바꿈을 실제 차이로 판정
-5) Tk named font 및 결과→A/B 확인 팝업 글꼴을 Malgun Gothic으로 통일
+4) 저장된 공백/줄바꿈은 실제 차이로 판정하되 CRLF/LF 차이는 정규화
+5) v20의 Malgun Gothic 폰트 수정 유지
 
 보존 확인:
 - HWP 5.x / HWPX / DOCX / TXT
@@ -19,25 +21,15 @@
 - pair_compare_seq stale worker 방지
 - A/B 범례 및 스크롤 구조
 - 원본 파일 수정/삭제/이동 기능 없음
-- __pycache__ 및 미사용 app_icon.png 제외
+- EPUB 코드 없음
+- __pycache__ / .pyc / 미사용 app_icon.png 제외
 
 로컬 검증:
 - Python 문법 검사 통과
-- 대용량(약 50만 자, 일부 변경) 하이브리드 상세 diff 테스트 약 0.03초
-- 같은 테스트의 v20 전체 문자 diff는 45초 제한 내 완료되지 않아 병목 확인
-- Tk UI 생성 smoke test 통과
-- CRLF/LF 정규화 확인
-- 공백 추가 / 줄바꿈 위치 변경 / 실제 문구 변경 문자 diff 확인
+- Tk UI 생성 smoke test: UI_CREATED_OK
+- whitespace-only 기능 테스트 통과
+- 실제 문구 변경은 블록 단위 변경 표시 확인
+- 약 30만 자 / whitespace 차이 20,000곳 상세 diff: 약 0.47초 (현재 Linux 테스트 환경)
 - ZIP 무결성 검사
 
-최종 Windows EXE는 GitHub Actions 빌드 후 Windows에서 1회 실행 검증 필요.
-
-최종 패키징 전 추가 점검:
-- v15 AST 대조: 기존 top-level 함수 삭제 없음
-- v15 App 메서드 중 show_side_diff_lines만 문자 단위 show_side_diff_chars로 의도적 교체
-- Tk named font 지정 및 사용자 확인 팝업의 빈 font family 제거
-- worker thread는 queue에만 기록하고 Tk UI 갱신은 poll/main thread에서 수행
-- EPUB 코드/확장자 없음
-- requirements / workflow / 아이콘 리소스 참조 일치
-- 패키지 내 __pycache__ 없음
-- 미사용 app_icon.png 없음
+최종 Windows EXE는 GitHub Actions 빌드 후 Windows에서 실제 파일로 1회 실행 검증 필요.

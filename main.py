@@ -387,58 +387,123 @@ class App(tk.Tk):
             self._pair_progress(seq,40,"B 본문 추출 중")
             rb.text,rb.kind=read_text(rb.path); rb.th=thash(rb.text)
 
-            # A/B 직접 비교에서는 저장된 줄바꿈/띄어쓰기 역시 실제 차이로 본다.
-            # 단, Windows/Unix 개행 코드(CRLF/LF) 차이 자체는 같은 줄바꿈으로 정규화한다.
+            # A/B 화면에는 저장된 줄바꿈/띄어쓰기를 보존한다. CRLF/LF 차이만 같은 개행으로 통일한다.
             ca,cb=pair_norm(ra.text),pair_norm(rb.text)
+            sa,sb=self._content_skeleton(ca),self._content_skeleton(cb)
             exact=ra.hash==rb.hash
             content=ca==cb
             self._pair_progress(seq,55,"유사도 계산 중")
-            if exact:sim=1.0;judge="완전 동일"
-            elif content:sim=1.0;judge="내용 동일"
-            elif len(ca)+len(cb)<600000:
-                sim=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio();judge="유사/상이"
+            if exact:
+                sim=1.0; judge="완전 동일"
+            elif content:
+                sim=1.0; judge="내용 동일"
+            elif sa==sb:
+                # 실제 글자는 같고 공백/개행만 다를 때 무거운 SequenceMatcher를 쓰지 않는다.
+                # 전체 길이에 대한 공백 슬롯 차이만 선형으로 반영해 100%와 구분한다.
+                diff_chars=self._whitespace_difference_size(ca,cb)
+                sim=max(0.0,1.0-diff_chars/max(1,len(ca),len(cb))); judge="유사/상이"
+            elif len(sa)+len(sb)<600000:
+                # v15와 같은 실제 글자 기준 유사도 계산. 공백/개행은 상세 차이에서 별도로 표시한다.
+                sim=difflib.SequenceMatcher(None,sa,sb,autojunk=False).ratio(); judge="유사/상이"
             else:
-                # 대용량은 기존 후보 계산과 같은 경량 방식으로 근사하되 공백도 토큰에 남긴다.
-                sim=jac(raw_shingles(ca),raw_shingles(cb));judge="유사/상이"
+                sim=jac(shingles(sa),shingles(sb)); judge="유사/상이"
 
             self._pair_progress(seq,72,"본문 차이 계산 중")
-            # 전체 문자를 한 번에 비교하면 대용량 문서에서 매우 느려질 수 있다.
-            # 먼저 줄 단위로 변경 블록만 찾고, 실제로 달라진 블록에만 문자 단위 비교를 적용한다.
             chunks,added,removed,changed=self._build_pair_diff(ca,cb,seq)
             self._pair_progress(seq,92,"결과 정리 중")
             self.q.put(("pairdone",seq,ra,rb,sim,judge,added,removed,changed,chunks,ca,cb))
         except Exception as e:self.q.put(("pairfatal",seq,str(e)))
 
+    @staticmethod
+    def _content_skeleton(text):
+        """공백/개행을 제외한 실제 글자열. whitespace-only 변경을 빠르게 판별한다."""
+        return "".join(ch for ch in text if not ch.isspace())
+
+    @staticmethod
+    def _split_whitespace_slots(text):
+        """각 실제 문자 앞의 공백 묶음 + 마지막 꼬리 공백을 반환한다."""
+        slots=[]; chars=[]; ws=[]
+        for ch in text:
+            if ch.isspace():
+                ws.append(ch)
+            else:
+                slots.append("".join(ws)); ws=[]; chars.append(ch)
+        slots.append("".join(ws))
+        return slots,chars
+
+    @classmethod
+    def _whitespace_difference_size(cls,a,b):
+        sa,ca=cls._split_whitespace_slots(a); sb,cb=cls._split_whitespace_slots(b)
+        if ca!=cb: return max(len(a),len(b))
+        return sum(max(len(x),len(y)) for x,y in zip(sa,sb) if x!=y)
+
+    @staticmethod
+    def _append_chunk(chunks,tag,a,b):
+        if not a and not b:return
+        if chunks and chunks[-1][0]==tag:
+            pt,pa,pb=chunks[-1]; chunks[-1]=(pt,pa+a,pb+b)
+        else:chunks.append((tag,a,b))
+
+    def _whitespace_chunks(self,a,b,chunks):
+        """실제 글자가 같은 두 구간의 공백/개행 차이만 O(n)으로 표시한다."""
+        sa,ca=self._split_whitespace_slots(a); sb,cb=self._split_whitespace_slots(b)
+        if ca!=cb:return None
+        added=removed=changed=0
+        for i,ch in enumerate(ca):
+            wa,wb=sa[i],sb[i]
+            if wa==wb:self._append_chunk(chunks,"equal",wa,wb)
+            elif wa and wb:
+                self._append_chunk(chunks,"replace",wa,wb); changed+=1
+            elif wa:
+                self._append_chunk(chunks,"delete",wa,""); removed+=1
+            elif wb:
+                self._append_chunk(chunks,"insert","",wb); added+=1
+            self._append_chunk(chunks,"equal",ch,ch)
+        wa,wb=sa[-1],sb[-1]
+        if wa==wb:self._append_chunk(chunks,"equal",wa,wb)
+        elif wa and wb:
+            self._append_chunk(chunks,"replace",wa,wb); changed+=1
+        elif wa:
+            self._append_chunk(chunks,"delete",wa,""); removed+=1
+        elif wb:
+            self._append_chunk(chunks,"insert","",wb); added+=1
+        return added,removed,changed
+
     def _build_pair_diff(self,ca,cb,seq):
-        """줄 단위로 후보를 좁힌 뒤 변경 블록만 문자 단위로 정밀 비교한다."""
+        """v15의 빠른 줄 비교 + whitespace-only 구간만 선형 정밀 표시."""
+        chunks=[]; added=removed=changed=0
+        # 문서 전체가 공백/개행만 다르면 줄 SequenceMatcher조차 생략한다.
+        if self._content_skeleton(ca)==self._content_skeleton(cb):
+            counts=self._whitespace_chunks(ca,cb,chunks)
+            return chunks,*counts
+
         la=ca.splitlines(keepends=True); lb=cb.splitlines(keepends=True)
         line_ops=difflib.SequenceMatcher(None,la,lb,autojunk=False).get_opcodes()
         work=sum(1 for tag,*_ in line_ops if tag=="replace")
         done=0; last_pct=72
-        chunks=[]; added=removed=changed=0
         for tag,i1,i2,j1,j2 in line_ops:
             aa="".join(la[i1:i2]); bb="".join(lb[j1:j2])
             if tag=="equal":
-                chunks.append(("equal",aa,bb))
+                self._append_chunk(chunks,"equal",aa,bb)
             elif tag=="delete":
-                chunks.append(("delete",aa,"")); removed+=1
+                self._append_chunk(chunks,"delete",aa,""); removed+=max(1,i2-i1)
             elif tag=="insert":
-                chunks.append(("insert","",bb)); added+=1
+                self._append_chunk(chunks,"insert","",bb); added+=max(1,j2-j1)
             else:
-                # 이 블록 안에서만 문자 단위 비교. 공백/줄바꿈도 실제 문자로 비교한다.
-                char_ops=difflib.SequenceMatcher(None,aa,bb,autojunk=False).get_opcodes()
-                for ctag,a1,a2,b1,b2 in char_ops:
-                    xa,xb=aa[a1:a2],bb[b1:b2]
-                    chunks.append((ctag,xa,xb))
-                    if ctag=="insert": added+=1
-                    elif ctag=="delete": removed+=1
-                    elif ctag=="replace": changed+=1
+                # 글자는 같고 whitespace만 다른 블록이면 공백/↵만 색칠한다.
+                if self._content_skeleton(aa)==self._content_skeleton(bb):
+                    a1,r1,c1=self._whitespace_chunks(aa,bb,chunks)
+                    added+=a1; removed+=r1; changed+=c1
+                else:
+                    # 실제 내용도 바뀐 경우에는 v15처럼 변경 블록 전체를 표시한다.
+                    # 문자 단위 SequenceMatcher는 사용하지 않아 대용량 병목을 피한다.
+                    self._append_chunk(chunks,"replace",aa,bb)
+                    changed+=max(1,i2-i1,j2-j1)
                 done+=1
                 if work:
                     pct=72+int(18*done/work)
                     if pct>=last_pct+2:
-                        self._pair_progress(seq,min(90,pct),"본문 차이 계산 중")
-                        last_pct=pct
+                        self._pair_progress(seq,min(90,pct),"본문 차이 계산 중"); last_pct=pct
         return chunks,added,removed,changed
 
     def finish_pair(self,ra,rb,sim,judge,added,removed,changed,chunks,ca,cb):
