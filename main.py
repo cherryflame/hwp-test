@@ -4,7 +4,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from collections import defaultdict
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, font as tkfont
+from tkinter import ttk, filedialog, messagebox
+import tkinter.font as tkfont
 
 APP="문서 중복·유사성 검사기"
 
@@ -101,7 +102,7 @@ def norm(s):
     return s.strip()
 def compact(s):return re.sub(r"\s+","",norm(s))
 def pair_norm(s):
-    """A/B 상세 비교용. 줄바꿈과 공백 자체를 실제 차이로 보존한다."""
+    # A/B 상세 비교에서는 사용자가 저장한 공백·탭·줄바꿈을 보존하고 개행 코드만 통일한다.
     return s.replace("\r\n","\n").replace("\r","\n").replace("\u00a0"," ")
 def display_safe(s):
     if not isinstance(s,str): return str(s)
@@ -113,10 +114,6 @@ def safe_utf8(s):
 def thash(s):return hashlib.sha256(safe_utf8(compact(s))).hexdigest()
 def shingles(s,k=9,limit=5000):
     s=compact(s)
-    if len(s)<=k:return {s} if s else set()
-    step=max(1,(len(s)-k+1)//limit)
-    return {s[i:i+k] for i in range(0,len(s)-k+1,step)}
-def raw_shingles(s,k=9,limit=5000):
     if len(s)<=k:return {s} if s else set()
     step=max(1,(len(s)-k+1)//limit)
     return {s[i:i+k] for i in range(0,len(s)-k+1,step)}
@@ -140,16 +137,15 @@ class App(tk.Tk):
             self.iconphoto(True,*self._app_icon_images)
         except Exception:
             self._app_icon_images=[]
-        self.configure_named_fonts()
         self.folders=[]; self.records=[]; self.groups=[]; self.q=queue.Queue(); self.running=False
         self.active_filter="전체"; self.result_counts={"전체":0,"완전 동일":0,"내용 동일":0,"유사":0,"읽기 실패":0}
         self.skip_diff_transfer_notice=False
         self.pair_compare_seq=0
+        self.configure_named_fonts()
         self.ui(); self.after(100,self.poll)
 
+
     def configure_named_fonts(self):
-        # Tk/ttk 기본 글꼴을 명시해 Listbox, Checkbutton, Toplevel 등에서
-        # 플랫폼 기본 글꼴이 섞여 보이지 않도록 한다.
         specs={
             "TkDefaultFont": ("Malgun Gothic",9),
             "TkTextFont": ("Malgun Gothic",10),
@@ -163,8 +159,9 @@ class App(tk.Tk):
         }
         for name,spec in specs.items():
             try:
-                tkfont.nametofont(name).configure(family=spec[0],size=spec[1],
-                                                  weight=spec[2] if len(spec)>2 else "normal")
+                tkfont.nametofont(name).configure(
+                    family=spec[0],size=spec[1],
+                    weight=spec[2] if len(spec)>2 else "normal")
             except tk.TclError:
                 pass
 
@@ -308,8 +305,7 @@ class App(tk.Tk):
 
         self.pair_summary=ttk.Label(pair_tab,text="비교할 파일 두 개를 선택해 주세요.",padding=(12,8),font=("Malgun Gothic",10,"bold"))
         self.pair_summary.pack(fill="x")
-        pairprog=ttk.Frame(pair_tab,padding=(12,0,12,7))
-        pairprog.pack(fill="x")
+        pairprog=ttk.Frame(pair_tab,padding=(12,0,12,7));pairprog.pack(fill="x")
         self.pair_progress=tk.DoubleVar(value=0)
         self.pair_progress_bar=ttk.Progressbar(pairprog,maximum=100,variable=self.pair_progress,style="Horizontal.TProgressbar")
         self.pair_progress_bar.pack(side="left",fill="x",expand=True)
@@ -324,6 +320,7 @@ class App(tk.Tk):
         tk.Label(legend,text=" A에만 있음 ",background="#ffdede").pack(side="left",padx=(6,3))
         tk.Label(legend,text=" B에만 있음 ",background="#dff3df").pack(side="left",padx=3)
         tk.Label(legend,text=" 양쪽 내용 변경 ",background="#fff0a8").pack(side="left",padx=3)
+        tk.Label(legend,text=" 공백·줄바꿈 차이 ",background="#dcecff").pack(side="left",padx=3)
 
         pane=ttk.Panedwindow(pair_tab,orient="horizontal");pane.pack(fill="both",expand=True,padx=8,pady=(0,4))
         self.pair_text=[]; self.pair_headers=[]
@@ -375,154 +372,158 @@ class App(tk.Tk):
     def _pair_progress(self,seq,value,label):
         self.q.put(("pairprogress",seq,value,label))
 
+    @staticmethod
+    def _ws_gaps(text):
+        """Return non-whitespace characters and the whitespace gap before each char plus trailing gap."""
+        chars=[]; gaps=[]; buf=[]
+        for ch in text:
+            if ch.isspace():
+                buf.append(ch)
+            else:
+                gaps.append("".join(buf)); buf=[]; chars.append(ch)
+        gaps.append("".join(buf))
+        return "".join(chars),gaps
+
+    @staticmethod
+    def _ws_visible(ws):
+        return ws.replace("\t","→").replace(" ","·").replace("\n","↵\n")
+
+    @staticmethod
+    def _ws_similarity(a,b):
+        """Fast character-like ratio for texts whose non-whitespace content is identical."""
+        core_a,gaps_a=App._ws_gaps(a); core_b,gaps_b=App._ws_gaps(b)
+        if core_a!=core_b:
+            return None,0
+        matched=len(core_a); diff_gaps=0
+        for ga,gb in zip(gaps_a,gaps_b):
+            if ga==gb:
+                matched+=len(ga)
+            else:
+                diff_gaps+=1
+                # Same whitespace characters can still count as matches; order is irrelevant for this light metric.
+                ca=defaultdict(int)
+                for ch in ga: ca[ch]+=1
+                for ch in gb:
+                    if ca[ch]>0: matched+=1; ca[ch]-=1
+        denom=len(a)+len(b)
+        return (2*matched/denom if denom else 1.0),diff_gaps
+
     def _compare_pair_worker(self,a,b,seq):
         try:
             self._pair_progress(seq,5,"A 파일 확인 중")
             ra=R(a); ra.hash=fhash(ra.path)
             self._pair_progress(seq,15,"A 본문 추출 중")
             ra.text,ra.kind=read_text(ra.path); ra.th=thash(ra.text)
-
             self._pair_progress(seq,30,"B 파일 확인 중")
             rb=R(b); rb.hash=fhash(rb.path)
             self._pair_progress(seq,40,"B 본문 추출 중")
             rb.text,rb.kind=read_text(rb.path); rb.th=thash(rb.text)
 
-            # A/B 화면에는 저장된 줄바꿈/띄어쓰기를 보존한다. CRLF/LF 차이만 같은 개행으로 통일한다.
-            ca,cb=pair_norm(ra.text),pair_norm(rb.text)
-            sa,sb=self._content_skeleton(ca),self._content_skeleton(cb)
+            na,nb=pair_norm(ra.text),pair_norm(rb.text)
+            ca,cb=compact(ra.text),compact(rb.text)
             exact=ra.hash==rb.hash
-            content=ca==cb
             self._pair_progress(seq,55,"유사도 계산 중")
+            ws_only=(ca==cb and na!=nb)
+            ws_gap_count=0
             if exact:
                 sim=1.0; judge="완전 동일"
-            elif content:
+            elif na==nb:
                 sim=1.0; judge="내용 동일"
-            elif sa==sb:
-                # 실제 글자는 같고 공백/개행만 다를 때 무거운 SequenceMatcher를 쓰지 않는다.
-                # 전체 길이에 대한 공백 슬롯 차이만 선형으로 반영해 100%와 구분한다.
-                diff_chars=self._whitespace_difference_size(ca,cb)
-                sim=max(0.0,1.0-diff_chars/max(1,len(ca),len(cb))); judge="유사/상이"
-            elif len(sa)+len(sb)<600000:
-                # v15와 같은 실제 글자 기준 유사도 계산. 공백/개행은 상세 차이에서 별도로 표시한다.
-                sim=difflib.SequenceMatcher(None,sa,sb,autojunk=False).ratio(); judge="유사/상이"
+            elif ws_only:
+                sim,_=self._ws_similarity(na,nb); judge="공백·줄바꿈 차이"
+            elif len(ca)+len(cb)<600000:
+                sim=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio(); judge="유사/상이"
             else:
-                sim=jac(shingles(sa),shingles(sb)); judge="유사/상이"
+                sim=jac(shingles(ca),shingles(cb)); judge="유사/상이"
 
             self._pair_progress(seq,72,"본문 차이 계산 중")
-            chunks,added,removed,changed=self._build_pair_diff(ca,cb,seq)
+            la,lb=na.splitlines(),nb.splitlines()
+            # 공백/줄바꿈만 다른 문서는 줄 정렬 자체가 크게 달라질 수 있으므로
+            # 무거운 줄 SequenceMatcher를 생략하고 선형 공백 비교로 바로 보낸다.
+            if ws_only:
+                ops=[("replace",0,len(la),0,len(lb))]
+            else:
+                sm=difflib.SequenceMatcher(None,la,lb,autojunk=False)
+                ops=sm.get_opcodes()
+            added=removed=changed=0
+            for tag,i1,i2,j1,j2 in ops:
+                if tag=="insert":
+                    added+=j2-j1
+                elif tag=="delete":
+                    removed+=i2-i1
+                elif tag=="replace":
+                    block_a="\n".join(la[i1:i2]); block_b="\n".join(lb[j1:j2])
+                    if compact(block_a)==compact(block_b):
+                        _,d=self._ws_similarity(block_a,block_b); ws_gap_count+=d
+                    else:
+                        changed+=max(i2-i1,j2-j1)
             self._pair_progress(seq,92,"결과 정리 중")
-            self.q.put(("pairdone",seq,ra,rb,sim,judge,added,removed,changed,chunks,ca,cb))
-        except Exception as e:self.q.put(("pairfatal",seq,str(e)))
+            self.q.put(("pairdone",seq,ra,rb,sim,judge,added,removed,changed,ops,la,lb,ws_gap_count))
+        except Exception as e:
+            self.q.put(("pairfatal",seq,str(e)))
 
-    @staticmethod
-    def _content_skeleton(text):
-        """공백/개행을 제외한 실제 글자열. whitespace-only 변경을 빠르게 판별한다."""
-        return "".join(ch for ch in text if not ch.isspace())
-
-    @staticmethod
-    def _split_whitespace_slots(text):
-        """각 실제 문자 앞의 공백 묶음 + 마지막 꼬리 공백을 반환한다."""
-        slots=[]; chars=[]; ws=[]
-        for ch in text:
-            if ch.isspace():
-                ws.append(ch)
-            else:
-                slots.append("".join(ws)); ws=[]; chars.append(ch)
-        slots.append("".join(ws))
-        return slots,chars
-
-    @classmethod
-    def _whitespace_difference_size(cls,a,b):
-        sa,ca=cls._split_whitespace_slots(a); sb,cb=cls._split_whitespace_slots(b)
-        if ca!=cb: return max(len(a),len(b))
-        return sum(max(len(x),len(y)) for x,y in zip(sa,sb) if x!=y)
-
-    @staticmethod
-    def _append_chunk(chunks,tag,a,b):
-        if not a and not b:return
-        if chunks and chunks[-1][0]==tag:
-            pt,pa,pb=chunks[-1]; chunks[-1]=(pt,pa+a,pb+b)
-        else:chunks.append((tag,a,b))
-
-    def _whitespace_chunks(self,a,b,chunks):
-        """실제 글자가 같은 두 구간의 공백/개행 차이만 O(n)으로 표시한다."""
-        sa,ca=self._split_whitespace_slots(a); sb,cb=self._split_whitespace_slots(b)
-        if ca!=cb:return None
-        added=removed=changed=0
-        for i,ch in enumerate(ca):
-            wa,wb=sa[i],sb[i]
-            if wa==wb:self._append_chunk(chunks,"equal",wa,wb)
-            elif wa and wb:
-                self._append_chunk(chunks,"replace",wa,wb); changed+=1
-            elif wa:
-                self._append_chunk(chunks,"delete",wa,""); removed+=1
-            elif wb:
-                self._append_chunk(chunks,"insert","",wb); added+=1
-            self._append_chunk(chunks,"equal",ch,ch)
-        wa,wb=sa[-1],sb[-1]
-        if wa==wb:self._append_chunk(chunks,"equal",wa,wb)
-        elif wa and wb:
-            self._append_chunk(chunks,"replace",wa,wb); changed+=1
-        elif wa:
-            self._append_chunk(chunks,"delete",wa,""); removed+=1
-        elif wb:
-            self._append_chunk(chunks,"insert","",wb); added+=1
-        return added,removed,changed
-
-    def _build_pair_diff(self,ca,cb,seq):
-        """v15의 빠른 줄 비교 + whitespace-only 구간만 선형 정밀 표시."""
-        chunks=[]; added=removed=changed=0
-        # 문서 전체가 공백/개행만 다르면 줄 SequenceMatcher조차 생략한다.
-        if self._content_skeleton(ca)==self._content_skeleton(cb):
-            counts=self._whitespace_chunks(ca,cb,chunks)
-            return chunks,*counts
-
-        la=ca.splitlines(keepends=True); lb=cb.splitlines(keepends=True)
-        line_ops=difflib.SequenceMatcher(None,la,lb,autojunk=False).get_opcodes()
-        work=sum(1 for tag,*_ in line_ops if tag=="replace")
-        done=0; last_pct=72
-        for tag,i1,i2,j1,j2 in line_ops:
-            aa="".join(la[i1:i2]); bb="".join(lb[j1:j2])
-            if tag=="equal":
-                self._append_chunk(chunks,"equal",aa,bb)
-            elif tag=="delete":
-                self._append_chunk(chunks,"delete",aa,""); removed+=max(1,i2-i1)
-            elif tag=="insert":
-                self._append_chunk(chunks,"insert","",bb); added+=max(1,j2-j1)
-            else:
-                # 글자는 같고 whitespace만 다른 블록이면 공백/↵만 색칠한다.
-                if self._content_skeleton(aa)==self._content_skeleton(bb):
-                    a1,r1,c1=self._whitespace_chunks(aa,bb,chunks)
-                    added+=a1; removed+=r1; changed+=c1
-                else:
-                    # 실제 내용도 바뀐 경우에는 v15처럼 변경 블록 전체를 표시한다.
-                    # 문자 단위 SequenceMatcher는 사용하지 않아 대용량 병목을 피한다.
-                    self._append_chunk(chunks,"replace",aa,bb)
-                    changed+=max(1,i2-i1,j2-j1)
-                done+=1
-                if work:
-                    pct=72+int(18*done/work)
-                    if pct>=last_pct+2:
-                        self._pair_progress(seq,min(90,pct),"본문 차이 계산 중"); last_pct=pct
-        return chunks,added,removed,changed
-
-    def finish_pair(self,ra,rb,sim,judge,added,removed,changed,chunks,ca,cb):
+    def finish_pair(self,ra,rb,sim,judge,added,removed,changed,ops,la,lb,ws_gap_count):
         self.pair_result=(ra,rb)
+        extra=f" · 공백·줄바꿈 {ws_gap_count}곳" if ws_gap_count else ""
         self.pair_summary["text"]=(f"{judge}  ·  유사도 {sim*100:.2f}%  ·  "
-            f"A {len(ca):,}자 / B {len(cb):,}자  ·  "
-            f"추가 {added}곳 / 삭제 {removed}곳 / 변경 {changed}곳")
-        self.show_side_diff_chars(chunks)
+            f"A {len(pair_norm(ra.text)):,}자 / B {len(pair_norm(rb.text)):,}자  ·  "
+            f"추가 {added}줄 / 삭제 {removed}줄 / 변경 {changed}줄{extra}")
+        self.show_side_diff_mixed(ops,la,lb)
         self.pair_note["text"]=(f"A: {ra.kind} · {self.sz(ra.size)}     B: {rb.kind} · {self.sz(rb.size)}  ·  "
-            "변경된 줄바꿈은 ↵ 기호로 표시")
+                                "공백은 ·, 줄바꿈은 ↵로 표시")
         self.pair_progress.set(100); self.pair_progress_text["text"]="완료 · 100%"
         self.pair_compare_btn["state"]="normal"
 
-    @staticmethod
-    def _visible_changed_text(text):
-        # 바뀐 줄바꿈은 배경색만으로 보이지 않으므로 ↵ + 실제 개행으로 표시한다.
-        return text.replace("\n","↵\n")
+    def _insert_ws_pair(self,ta,tb,a,b):
+        core_a,gaps_a=self._ws_gaps(a); core_b,gaps_b=self._ws_gaps(b)
+        if core_a!=core_b:
+            ta.insert("end",a,"chg"); tb.insert("end",b,"chg"); return 0
+        diffs=0
+        for idx,ch in enumerate(core_a):
+            ga,gb=gaps_a[idx],gaps_b[idx]
+            if ga==gb:
+                ta.insert("end",ga,"same"); tb.insert("end",gb,"same")
+            else:
+                diffs+=1
+                ta.insert("end",self._ws_visible(ga),"ws")
+                tb.insert("end",self._ws_visible(gb),"ws")
+            ta.insert("end",ch,"same"); tb.insert("end",ch,"same")
+        ga,gb=gaps_a[-1],gaps_b[-1]
+        if ga==gb:
+            ta.insert("end",ga,"same"); tb.insert("end",gb,"same")
+        else:
+            diffs+=1
+            ta.insert("end",self._ws_visible(ga),"ws"); tb.insert("end",self._ws_visible(gb),"ws")
+        return diffs
 
-    def show_side_diff_chars(self,chunks):
+    def show_side_diff_mixed(self,ops,la,lb):
+        ta,tb=self.pair_text
+        for t in (ta,tb):
+            t.configure(state="normal"); t.delete("1.0","end")
+            t.tag_configure("same")
+            t.tag_configure("del",background="#ffdede")
+            t.tag_configure("add",background="#dff3df")
+            t.tag_configure("chg",background="#fff0a8")
+            t.tag_configure("ws",background="#dcecff",foreground="#315b7b")
+        for tag,i1,i2,j1,j2 in ops:
+            if tag=="equal":
+                for line in la[i1:i2]: ta.insert("end",line+"\n","same")
+                for line in lb[j1:j2]: tb.insert("end",line+"\n","same")
+            elif tag=="delete":
+                for line in la[i1:i2]: ta.insert("end",line+"\n","del")
+            elif tag=="insert":
+                for line in lb[j1:j2]: tb.insert("end",line+"\n","add")
+            else:
+                a="\n".join(la[i1:i2]); b="\n".join(lb[j1:j2])
+                if compact(a)==compact(b):
+                    self._insert_ws_pair(ta,tb,a,b)
+                    ta.insert("end","\n","same"); tb.insert("end","\n","same")
+                else:
+                    for line in la[i1:i2]: ta.insert("end",line+"\n","chg")
+                    for line in lb[j1:j2]: tb.insert("end",line+"\n","chg")
+        for t in (ta,tb): t.configure(state="disabled")
+
+    def show_side_diff_lines(self,ops,la,lb):
         ta,tb=self.pair_text
         for t in (ta,tb):
             t.configure(state="normal");t.delete("1.0","end")
@@ -530,16 +531,13 @@ class App(tk.Tk):
             t.tag_configure("del",background="#ffdede")
             t.tag_configure("add",background="#dff3df")
             t.tag_configure("chg",background="#fff0a8")
-        for tag,aa,bb in chunks:
-            if tag=="equal":
-                ta.insert("end",aa,"same"); tb.insert("end",bb,"same")
-            elif tag=="delete":
-                ta.insert("end",self._visible_changed_text(aa),"del")
-            elif tag=="insert":
-                tb.insert("end",self._visible_changed_text(bb),"add")
-            else: # replace: 실제로 바뀐 문자/공백/줄바꿈 구간만 노랑
-                ta.insert("end",self._visible_changed_text(aa),"chg")
-                tb.insert("end",self._visible_changed_text(bb),"chg")
+        for tag,i1,i2,j1,j2 in ops:
+            taga=tagb="same"
+            if tag=="delete":taga="del"
+            elif tag=="insert":tagb="add"
+            elif tag=="replace":taga=tagb="chg"
+            for line in la[i1:i2]:ta.insert("end",line+"\n",taga)
+            for line in lb[j1:j2]:tb.insert("end",line+"\n",tagb)
         for t in (ta,tb):t.configure(state="disabled")
 
     def show_side_diff(self,a,b,sm):
@@ -676,8 +674,8 @@ class App(tk.Tk):
                 elif m[0]=="pairfatal":
                     if m[1]==self.pair_compare_seq:
                         self.pair_compare_btn["state"]="normal"
-                        self.pair_progress_text["text"]="비교 실패"
                         self.pair_summary["text"]="비교에 실패했습니다."
+                        self.pair_progress_text["text"]="실패"
                         messagebox.showerror(APP,"비교하지 못했습니다.\n\n"+m[2])
                 elif m[0]=="fatal":self.running=False;self.start["state"]="normal";messagebox.showerror(APP,m[1])
         except queue.Empty:pass
