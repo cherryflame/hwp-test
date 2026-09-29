@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from collections import defaultdict
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, font as tkfont
 
 APP="문서 중복·유사성 검사기"
 
@@ -140,11 +140,33 @@ class App(tk.Tk):
             self.iconphoto(True,*self._app_icon_images)
         except Exception:
             self._app_icon_images=[]
+        self.configure_named_fonts()
         self.folders=[]; self.records=[]; self.groups=[]; self.q=queue.Queue(); self.running=False
         self.active_filter="전체"; self.result_counts={"전체":0,"완전 동일":0,"내용 동일":0,"유사":0,"읽기 실패":0}
         self.skip_diff_transfer_notice=False
         self.pair_compare_seq=0
         self.ui(); self.after(100,self.poll)
+
+    def configure_named_fonts(self):
+        # Tk/ttk 기본 글꼴을 명시해 Listbox, Checkbutton, Toplevel 등에서
+        # 플랫폼 기본 글꼴이 섞여 보이지 않도록 한다.
+        specs={
+            "TkDefaultFont": ("Malgun Gothic",9),
+            "TkTextFont": ("Malgun Gothic",10),
+            "TkFixedFont": ("Malgun Gothic",9),
+            "TkMenuFont": ("Malgun Gothic",9),
+            "TkHeadingFont": ("Malgun Gothic",9,"bold"),
+            "TkCaptionFont": ("Malgun Gothic",9,"bold"),
+            "TkSmallCaptionFont": ("Malgun Gothic",9),
+            "TkIconFont": ("Malgun Gothic",9),
+            "TkTooltipFont": ("Malgun Gothic",9),
+        }
+        for name,spec in specs.items():
+            try:
+                tkfont.nametofont(name).configure(family=spec[0],size=spec[1],
+                                                  weight=spec[2] if len(spec)>2 else "normal")
+            except tk.TclError:
+                pass
 
     def setup_style(self):
         self.configure(background="#f5f7fa")
@@ -380,23 +402,51 @@ class App(tk.Tk):
                 sim=jac(raw_shingles(ca),raw_shingles(cb));judge="유사/상이"
 
             self._pair_progress(seq,72,"본문 차이 계산 중")
-            sm=difflib.SequenceMatcher(None,ca,cb,autojunk=False)
-            ops=sm.get_opcodes()
-            added=removed=changed=0
-            for tag,i1,i2,j1,j2 in ops:
-                if tag=="insert":added+=1
-                elif tag=="delete":removed+=1
-                elif tag=="replace":changed+=1
+            # 전체 문자를 한 번에 비교하면 대용량 문서에서 매우 느려질 수 있다.
+            # 먼저 줄 단위로 변경 블록만 찾고, 실제로 달라진 블록에만 문자 단위 비교를 적용한다.
+            chunks,added,removed,changed=self._build_pair_diff(ca,cb,seq)
             self._pair_progress(seq,92,"결과 정리 중")
-            self.q.put(("pairdone",seq,ra,rb,sim,judge,added,removed,changed,ops,ca,cb))
+            self.q.put(("pairdone",seq,ra,rb,sim,judge,added,removed,changed,chunks,ca,cb))
         except Exception as e:self.q.put(("pairfatal",seq,str(e)))
 
-    def finish_pair(self,ra,rb,sim,judge,added,removed,changed,ops,ca,cb):
+    def _build_pair_diff(self,ca,cb,seq):
+        """줄 단위로 후보를 좁힌 뒤 변경 블록만 문자 단위로 정밀 비교한다."""
+        la=ca.splitlines(keepends=True); lb=cb.splitlines(keepends=True)
+        line_ops=difflib.SequenceMatcher(None,la,lb,autojunk=False).get_opcodes()
+        work=sum(1 for tag,*_ in line_ops if tag=="replace")
+        done=0; last_pct=72
+        chunks=[]; added=removed=changed=0
+        for tag,i1,i2,j1,j2 in line_ops:
+            aa="".join(la[i1:i2]); bb="".join(lb[j1:j2])
+            if tag=="equal":
+                chunks.append(("equal",aa,bb))
+            elif tag=="delete":
+                chunks.append(("delete",aa,"")); removed+=1
+            elif tag=="insert":
+                chunks.append(("insert","",bb)); added+=1
+            else:
+                # 이 블록 안에서만 문자 단위 비교. 공백/줄바꿈도 실제 문자로 비교한다.
+                char_ops=difflib.SequenceMatcher(None,aa,bb,autojunk=False).get_opcodes()
+                for ctag,a1,a2,b1,b2 in char_ops:
+                    xa,xb=aa[a1:a2],bb[b1:b2]
+                    chunks.append((ctag,xa,xb))
+                    if ctag=="insert": added+=1
+                    elif ctag=="delete": removed+=1
+                    elif ctag=="replace": changed+=1
+                done+=1
+                if work:
+                    pct=72+int(18*done/work)
+                    if pct>=last_pct+2:
+                        self._pair_progress(seq,min(90,pct),"본문 차이 계산 중")
+                        last_pct=pct
+        return chunks,added,removed,changed
+
+    def finish_pair(self,ra,rb,sim,judge,added,removed,changed,chunks,ca,cb):
         self.pair_result=(ra,rb)
         self.pair_summary["text"]=(f"{judge}  ·  유사도 {sim*100:.2f}%  ·  "
             f"A {len(ca):,}자 / B {len(cb):,}자  ·  "
             f"추가 {added}곳 / 삭제 {removed}곳 / 변경 {changed}곳")
-        self.show_side_diff_chars(ops,ca,cb)
+        self.show_side_diff_chars(chunks)
         self.pair_note["text"]=(f"A: {ra.kind} · {self.sz(ra.size)}     B: {rb.kind} · {self.sz(rb.size)}  ·  "
             "변경된 줄바꿈은 ↵ 기호로 표시")
         self.pair_progress.set(100); self.pair_progress_text["text"]="완료 · 100%"
@@ -407,7 +457,7 @@ class App(tk.Tk):
         # 바뀐 줄바꿈은 배경색만으로 보이지 않으므로 ↵ + 실제 개행으로 표시한다.
         return text.replace("\n","↵\n")
 
-    def show_side_diff_chars(self,ops,ca,cb):
+    def show_side_diff_chars(self,chunks):
         ta,tb=self.pair_text
         for t in (ta,tb):
             t.configure(state="normal");t.delete("1.0","end")
@@ -415,8 +465,7 @@ class App(tk.Tk):
             t.tag_configure("del",background="#ffdede")
             t.tag_configure("add",background="#dff3df")
             t.tag_configure("chg",background="#fff0a8")
-        for tag,i1,i2,j1,j2 in ops:
-            aa,bb=ca[i1:i2],cb[j1:j2]
+        for tag,aa,bb in chunks:
             if tag=="equal":
                 ta.insert("end",aa,"same"); tb.insert("end",bb,"same")
             elif tag=="delete":
@@ -644,7 +693,7 @@ class App(tk.Tk):
         w.grab_set()
         body=ttk.Frame(w,padding=(22,18,22,8));body.pack(fill="both",expand=True)
         ttk.Label(body,text="선택한 두 파일을 ‘파일 2개 비교’ 탭에서 비교합니다.",
-                  font=("",10,"bold")).pack(anchor="w")
+                  font=("Malgun Gothic",10,"bold")).pack(anchor="w")
         ttk.Label(body,text="기존에 비교하던 파일과 결과가 있다면 새 파일로 교체됩니다.",
                   foreground="#5f6f7a").pack(anchor="w",pady=(7,14))
         skip=tk.BooleanVar(value=False)
