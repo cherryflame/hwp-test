@@ -2,17 +2,19 @@
 import os, sys, re, csv, time, queue, hashlib, zipfile, difflib, threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from urllib.parse import unquote
+import posixpath
 from collections import defaultdict
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
 
-APP="문서 중복·유사성 검사기"
+APP="문서 중복·유사성 검사기 — EPUB 지원판"
 
 def resource_path(name):
     base=getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base,name)
-EXTS={".hwp",".hwpx",".docx",".txt"}
+EXTS={".hwp",".hwpx",".docx",".txt",".epub"}
 
 def fhash(p):
     h=hashlib.sha256()
@@ -54,6 +56,77 @@ def read_hwpx(p):
         for n in sec: out.append(xmltext(z.read(n)))
     return "\n".join(out),"HWPX"
 
+def _epub_local(tag):
+    return tag.split("}")[-1].lower()
+
+def _epub_html_text(data):
+    """EPUB XHTML의 body를 문단/줄바꿈을 보존한 일반 텍스트로 변환한다."""
+    root=ET.fromstring(data)
+    out=[]
+    block_tags={"p","div","section","article","header","footer","aside","nav","blockquote","pre","li","dt","dd","h1","h2","h3","h4","h5","h6","tr"}
+    skip_tags={"script","style","svg","head"}
+    def walk(e):
+        tag=_epub_local(e.tag)
+        if tag in skip_tags:return
+        if tag in block_tags and out and not out[-1].endswith("\n"):out.append("\n")
+        if e.text:out.append(e.text)
+        for c in e:
+            if _epub_local(c.tag)=="br":out.append("\n")
+            else:walk(c)
+            if c.tail:out.append(c.tail)
+        if tag in block_tags and (not out or not out[-1].endswith("\n")):out.append("\n")
+    body=next((e for e in root.iter() if _epub_local(e.tag)=="body"),None)
+    walk(body if body is not None else root)
+    return "".join(out)
+
+def read_epub(p):
+    """EPUB 표준 container.xml → OPF → spine 순서로 본문을 추출한다."""
+    with zipfile.ZipFile(p) as z:
+        names=set(z.namelist())
+        if "META-INF/container.xml" not in names:
+            raise RuntimeError("EPUB container.xml이 없습니다.")
+        try:
+            container=ET.fromstring(z.read("META-INF/container.xml"))
+        except ET.ParseError as e:
+            raise RuntimeError(f"EPUB container.xml 파싱 실패: {e}")
+        rootfile=None
+        for e in container.iter():
+            if _epub_local(e.tag)=="rootfile":
+                rootfile=e.attrib.get("full-path")
+                if rootfile:break
+        if not rootfile:raise RuntimeError("EPUB OPF 경로를 찾지 못했습니다.")
+        rootfile=posixpath.normpath(unquote(rootfile))
+        if rootfile not in names:raise RuntimeError("EPUB OPF 파일을 찾지 못했습니다.")
+        try:opf=ET.fromstring(z.read(rootfile))
+        except ET.ParseError as e:raise RuntimeError(f"EPUB OPF 파싱 실패: {e}")
+        manifest={}
+        for e in opf.iter():
+            if _epub_local(e.tag)=="item":
+                iid=e.attrib.get("id");href=e.attrib.get("href")
+                if iid and href:
+                    manifest[iid]=(href,e.attrib.get("media-type","").lower(),e.attrib.get("properties",""))
+        spine=[]
+        for e in opf.iter():
+            if _epub_local(e.tag)=="itemref":
+                iid=e.attrib.get("idref")
+                if iid:spine.append(iid)
+        base=posixpath.dirname(rootfile)
+        out=[]
+        for iid in spine:
+            item=manifest.get(iid)
+            if not item:continue
+            href,media,props=item
+            clean=unquote(href.split("#",1)[0].split("?",1)[0])
+            if "html" not in media and not clean.lower().endswith((".xhtml",".html",".htm")):continue
+            if "nav" in props.split():continue
+            name=posixpath.normpath(posixpath.join(base,clean))
+            if name not in names:continue
+            try:text=_epub_html_text(z.read(name))
+            except ET.ParseError:raise RuntimeError(f"EPUB XHTML 파싱 실패: {name}")
+            if text.strip():out.append(text)
+        if not out:raise RuntimeError("EPUB spine에서 읽을 본문을 찾지 못했습니다.")
+        return "\n".join(out),"EPUB"
+
 def read_hwp(p):
     # 검증된 syhwp를 사용. 버전 차이에 대비해 공개 API 후보를 순차 시도.
     import syhwp
@@ -94,6 +167,7 @@ def read_text(p):
     if e==".docx":return read_docx(p)
     if e==".hwpx":return read_hwpx(p)
     if e==".hwp":return read_hwp(p)
+    if e==".epub":return read_epub(p)
     raise RuntimeError("지원하지 않는 형식")
 
 def norm(s):
@@ -117,6 +191,13 @@ def shingles(s,k=9,limit=5000):
     if len(s)<=k:return {s} if s else set()
     step=max(1,(len(s)-k+1)//limit)
     return {s[i:i+k] for i in range(0,len(s)-k+1,step)}
+def word_shingles(s,k=5,limit=1200):
+    # EPUB 교차 형식 후보 탐색용. 일반 형식끼리의 v23 후보 판정에는 사용하지 않는다.
+    words=re.findall(r"[^\W_]+",norm(s),flags=re.UNICODE)
+    if len(words)<=k:return {"\x1f".join(words)} if words else set()
+    total=len(words)-k+1;step=max(1,total//limit)
+    return {"\x1f".join(words[i:i+k]) for i in range(0,total,step)}
+
 def jac(a,b):return len(a&b)/len(a|b) if a and b else (1 if not a and not b else 0)
 
 class R:
@@ -299,7 +380,7 @@ class App(tk.Tk):
             ttk.Entry(row,textvariable=self.pair_paths[idx]).pack(side="left",fill="x",expand=True,padx=(0,7))
             self.secondary_button(row,"파일 선택",lambda i=idx:self.pick_pair(i)).pack(side="left")
         action=ttk.Frame(pairtop,style="Card.TFrame");action.pack(fill="x",pady=(8,0))
-        ttk.Label(action,text="HWP 5.x · HWPX · DOCX · TXT / 서로 다른 형식도 본문 비교 가능",style="CardMuted.TLabel").pack(side="left")
+        ttk.Label(action,text="HWP 5.x · HWPX · DOCX · TXT · EPUB / 서로 다른 형식도 본문 비교 가능",style="CardMuted.TLabel").pack(side="left")
         self.pair_compare_btn=ttk.Button(action,text="두 파일 비교",command=self.compare_pair,style="Primary.TButton");self.pair_compare_btn.pack(side="right")
         self.secondary_button(action,"초기화",self.reset_pair).pack(side="right",padx=(18,8))
 
@@ -339,7 +420,7 @@ class App(tk.Tk):
             self.pair_text.append(t)
 
     def pick_pair(self,idx):
-        p=filedialog.askopenfilename(filetypes=[("지원 문서","*.hwp *.hwpx *.docx *.txt"),("모든 파일","*.*")])
+        p=filedialog.askopenfilename(filetypes=[("지원 문서","*.hwp *.hwpx *.docx *.txt *.epub"),("모든 파일","*.*")])
         if p:
             self.pair_paths[idx].set(p)
             self.pair_headers[idx].set(self.short_path(p))
@@ -431,6 +512,10 @@ class App(tk.Tk):
                 sim=1.0; judge="내용 동일"
             elif ws_only:
                 sim,_=self._ws_similarity(na,nb); judge="공백·줄바꿈 차이"
+            elif ra.ext==".epub" or rb.ext==".epub":
+                # EPUB 교차 형식은 마크업→본문 변환 때문에 위치가 조금씩 밀릴 수 있다.
+                # autojunk=False는 장문에서 지나치게 느릴 수 있어 EPUB 쌍에만 표준 휴리스틱을 사용한다.
+                sim=difflib.SequenceMatcher(None,ca,cb,autojunk=True).ratio(); judge="유사/상이"
             elif len(ca)+len(cb)<600000:
                 sim=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio(); judge="유사/상이"
             else:
@@ -443,7 +528,10 @@ class App(tk.Tk):
             if ws_only:
                 ops=[("replace",0,len(la),0,len(lb))]
             else:
-                sm=difflib.SequenceMatcher(None,la,lb,autojunk=False)
+                # EPUB이 포함된 교차 형식은 줄 수/문단 분할 차이가 커질 수 있어
+                # 표준 autojunk 휴리스틱으로 장문 정렬 병목을 피한다. 기본판 쌍은 v23 동작 그대로다.
+                use_autojunk=(ra.ext==".epub" or rb.ext==".epub")
+                sm=difflib.SequenceMatcher(None,la,lb,autojunk=use_autojunk)
                 ops=sm.get_opcodes()
             added=removed=changed=0
             for tag,i1,i2,j1,j2 in ops:
@@ -607,12 +695,14 @@ class App(tk.Tk):
             # 모든 파일쌍을 직접 비교하지 않는다.
             # 각 문서의 제한된 9글자 조각을 역색인하여 실제로 본문 일부를 공유하는 파일만 후보로 만든다.
             self.q.put(("phase",f"유사 문서 후보를 만드는 중 · {len(valid)}개 문서"))
-            inv=defaultdict(list); sigs=[]; lengths=[]
+            inv=defaultdict(list); winv=defaultdict(list); sigs=[]; wsigs=[]; lengths=[]
             for idx,r in enumerate(valid):
                 c=compact(r.text); lengths.append(len(c))
                 sg=shingles(c,k=9,limit=1200); sigs.append(sg)
+                wg=word_shingles(r.text,k=5,limit=1200); wsigs.append(wg)
                 # 지나치게 흔한 짧은 조각의 영향 감소를 위해 문서당 최대 1200개
                 for token in sg: inv[token].append(idx)
+                for token in wg: winv[token].append(idx)
 
             pair_hits=defaultdict(int)
             for ids in inv.values():
@@ -620,6 +710,17 @@ class App(tk.Tk):
                 for x in range(len(ids)):
                     for y in range(x+1,len(ids)):
                         i,j=ids[x],ids[y]
+                        if lengths[i] and lengths[j] and min(lengths[i],lengths[j])/max(lengths[i],lengths[j])>=.70:
+                            pair_hits[(i,j)]+=1
+
+            # EPUB이 포함된 쌍에만 단어 기반 후보 신호를 보강한다.
+            # EPUB이 없는 기존 v23 문서쌍의 후보 생성은 그대로 유지한다.
+            for ids in winv.values():
+                if len(ids)>80:continue
+                for x in range(len(ids)):
+                    for y in range(x+1,len(ids)):
+                        i,j=ids[x],ids[y]
+                        if valid[i].ext != ".epub" and valid[j].ext != ".epub":continue
                         if lengths[i] and lengths[j] and min(lengths[i],lengths[j])/max(lengths[i],lengths[j])>=.70:
                             pair_hits[(i,j)]+=1
 
@@ -635,9 +736,12 @@ class App(tk.Tk):
             for n,(i,j) in enumerate(candidates,1):
                 a,b=valid[i],valid[j]
                 rough=jac(sigs[i],sigs[j])
+                if a.ext==".epub" or b.ext==".epub":rough=max(rough,jac(wsigs[i],wsigs[j]))
                 if rough<max(.30,cut-.40):continue
                 ca,cb=compact(a.text),compact(b.text)
-                if len(ca)+len(cb)<600000:
+                if a.ext==".epub" or b.ext==".epub":
+                    score=difflib.SequenceMatcher(None,ca,cb,autojunk=True).ratio()
+                elif len(ca)+len(cb)<600000:
                     score=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio()
                 else: score=rough
                 if score>=cut:edges.append((a,b,score))

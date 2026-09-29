@@ -1,27 +1,37 @@
-문서 중복·유사성 검사기 — v15 기반 공백·줄바꿈 비교 수정판 검증 기록
+문서 중복·유사성 검사기 — EPUB 지원판 v24 검증 메모
 
-[기준]
-- document_finder_v15.zip을 기준으로 수정
-- EPUB 미지원: HWP 5.x / HWPX / DOCX / TXT만 유지
-- 폴더 검사 알고리즘 및 기존 결과/필터/CSV 흐름 유지
+기준:
+- document_finder_v23_basic_v15_whitespace.zip에서 재제작
+- v23 기존 함수/메서드 누락: 0
 
-[이번 변경]
-- 파일 2개 비교 단계별 진행률 추가
-- Tk 기본 폰트를 Malgun Gothic으로 통일
-- 실제 문구 변경: 기존 v15 방식의 줄/변경 블록 색칠
-- 공백·줄바꿈만 변경: 별도 파란색 표시
-- 변경 공백은 ·, 변경 줄바꿈은 ↵로 가시화
-- 공백·줄바꿈 전용 비교는 선형 스캔; 문자 단위 SequenceMatcher 미사용
-- 문서 전체가 공백·줄바꿈만 다른 경우 줄 단위 SequenceMatcher도 생략
+추가/변경:
+- 앱 제목: 문서 중복·유사성 검사기 — EPUB 지원판
+- 지원 확장자: .epub 추가
+- EPUB: META-INF/container.xml -> OPF -> manifest/spine -> XHTML/HTML 본문 추출
+- nav 전용 문서 제외, percent-encoded 내부 경로 처리
+- EPUB 포함 폴더 후보쌍에만 word-shingle 후보 신호 추가
+- EPUB 포함 쌍의 장문 SequenceMatcher는 autojunk=True로 병목 완화
+- 비-EPUB 문서쌍의 v23 후보/비교 동작은 유지
+- GitHub Actions EXE/Artifact 이름에 EPUB_지원판 표시
+- 아이콘: 기존 디자인 유지, 남색/파랑 계열을 약간 보랏빛 인디고로 조정
 
-[검증]
-- Python 문법 검사 통과
-- Tk App 생성 smoke test 통과
-- v15 기존 함수 보존 확인
-- GitHub Actions / requirements / icon resource 참조 확인
-- ZIP 무결성 검사 통과
-- __pycache__ / *.pyc / 미사용 app_icon.png 제외
+실제 샘플:
+- 카밀라.epub: EPUB 추출 성공, 176,547자
+- 카밀라.txt: TXT 추출 성공, 178,870자
+- compact 길이: EPUB 142,882 / TXT 142,912
+- EPUB/TXT 유사도(auto junk): 약 99.95%
+- EPUB 추출 약 0.03초(검증 환경)
+- EPUB/TXT 유사도 계산 약 2초, 줄 diff는 autojunk 적용 시 약 0.02초(검증 환경; Windows/파일별 상이)
 
-[Windows 최종 확인]
-- 이 수정 소스의 Windows EXE는 GitHub Actions 빌드 후 실제 실행 확인 필요
-- 실제 대용량 HWP/TXT에서 체감 속도 확인 필요
+검증:
+- python -m py_compile main.py: PASS
+- Tk UI 생성 smoke test: UI_CREATED_OK
+- v23 함수 누락 검사: PASS (0개)
+- ZIP 무결성: 패키징 후 검사
+- __pycache__ / .pyc 제외
+
+Windows 최종 확인 필요:
+- GitHub Actions 빌드 성공
+- EXE 실행/아이콘/폰트
+- 실제 EPUB + HWP/TXT/DOCX 교차 비교
+- 대용량 EPUB 비교 체감 속도
