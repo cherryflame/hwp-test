@@ -1,37 +1,17 @@
-문서 중복·유사성 검사기 — EPUB 지원판 v24 검증 메모
-
-기준:
-- document_finder_v23_basic_v15_whitespace.zip에서 재제작
-- v23 기존 함수/메서드 누락: 0
-
-추가/변경:
-- 앱 제목: 문서 중복·유사성 검사기 — EPUB 지원판
-- 지원 확장자: .epub 추가
-- EPUB: META-INF/container.xml -> OPF -> manifest/spine -> XHTML/HTML 본문 추출
-- nav 전용 문서 제외, percent-encoded 내부 경로 처리
-- EPUB 포함 폴더 후보쌍에만 word-shingle 후보 신호 추가
-- EPUB 포함 쌍의 장문 SequenceMatcher는 autojunk=True로 병목 완화
-- 비-EPUB 문서쌍의 v23 후보/비교 동작은 유지
-- GitHub Actions EXE/Artifact 이름에 EPUB_지원판 표시
-- 아이콘: 기존 디자인 유지, 남색/파랑 계열을 약간 보랏빛 인디고로 조정
-
-실제 샘플:
-- 카밀라.epub: EPUB 추출 성공, 176,547자
-- 카밀라.txt: TXT 추출 성공, 178,870자
-- compact 길이: EPUB 142,882 / TXT 142,912
-- EPUB/TXT 유사도(auto junk): 약 99.95%
-- EPUB 추출 약 0.03초(검증 환경)
-- EPUB/TXT 유사도 계산 약 2초, 줄 diff는 autojunk 적용 시 약 0.02초(검증 환경; Windows/파일별 상이)
-
-검증:
-- python -m py_compile main.py: PASS
-- Tk UI 생성 smoke test: UI_CREATED_OK
-- v23 함수 누락 검사: PASS (0개)
-- ZIP 무결성: 패키징 후 검사
-- __pycache__ / .pyc 제외
-
-Windows 최종 확인 필요:
-- GitHub Actions 빌드 성공
-- EXE 실행/아이콘/폰트
-- 실제 EPUB + HWP/TXT/DOCX 교차 비교
-- 대용량 EPUB 비교 체감 속도
+EPUB 지원판 최종 체크
+- 기준: document_finder_v23_basic_v15_whitespace.zip
+- APP 제목: 문서 중복·유사성 검사기 — EPUB 지원판
+- 지원: HWP 5.x / HWPX / DOCX / TXT / EPUB
+- v23 비-EPUB 비교 경로 유지
+- EPUB 표준 container.xml → OPF → spine 추출
+- EPUB 후보에서 길이 70% 강제 조건 제거
+- 단일 폴더 내 EPUB 교차 포맷 후보 생성 지원
+- EPUB 장문 전체 문자 SequenceMatcher 제거
+- EPUB 상세 비교: 문장/빈 줄 정렬 + 공백/줄바꿈 파란색 + 실제 문구 변경 노란색
+- 파일 2개 비교 진행률 유지
+- 폰트 Malgun Gothic 유지
+- comparison sequence id 유지
+- 원본 파일 read-only
+- __pycache__ / pyc 최종 ZIP 제외
+- GitHub Actions EXE명: 문서_중복_유사성_검사기_EPUB_지원판.exe
+- EPUB판 아이콘: 기본판 구조 유지 + 로즈/핑크 포인트
