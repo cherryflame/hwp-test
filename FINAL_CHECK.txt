@@ -1,17 +1,11 @@
-EPUB 지원판 최종 체크
-- 기준: document_finder_v23_basic_v15_whitespace.zip
-- APP 제목: 문서 중복·유사성 검사기 — EPUB 지원판
-- 지원: HWP 5.x / HWPX / DOCX / TXT / EPUB
-- v23 비-EPUB 비교 경로 유지
-- EPUB 표준 container.xml → OPF → spine 추출
-- EPUB 후보에서 길이 70% 강제 조건 제거
-- 단일 폴더 내 EPUB 교차 포맷 후보 생성 지원
-- EPUB 장문 전체 문자 SequenceMatcher 제거
-- EPUB 상세 비교: 문장/빈 줄 정렬 + 공백/줄바꿈 파란색 + 실제 문구 변경 노란색
-- 파일 2개 비교 진행률 유지
-- 폰트 Malgun Gothic 유지
-- comparison sequence id 유지
-- 원본 파일 read-only
-- __pycache__ / pyc 최종 ZIP 제외
-- GitHub Actions EXE명: 문서_중복_유사성_검사기_EPUB_지원판.exe
-- EPUB판 아이콘: 기본판 구조 유지 + 로즈/핑크 포인트
+EPUB 지원판 v26 최종 체크
+- 기준: v25(기본판 v23 분기)에서 EPUB 교차형식 유사도만 교정
+- HWP/HWPX/DOCX/TXT 비-EPUB 비교 경로 유지
+- EPUB 교차형식: 공백/개행/문단 장식 기호를 제외한 문자 흐름 7-char shingle Dice
+- 장문 전체 문자 SequenceMatcher를 EPUB 최종 유사도에 사용하지 않음
+- EPUB 후보 탐색도 동일 semantic shingle 신호 사용
+- 단일 폴더 EPUB+TXT 카밀라 테스트: 유사 100%, 약 0.36초(현재 Linux 테스트 환경)
+- Tk UI 생성 smoke test PASS
+- Python compile PASS
+- ICO: 16/24/32/48/64/128/256 포함
+- 원본 파일 삭제/이동/수정 없음

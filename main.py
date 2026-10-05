@@ -194,11 +194,26 @@ def word_tokens(s):
     return re.findall(r"[^\W_]+|[^\w\s]",norm(s),flags=re.UNICODE)
 
 def word_shingle_hashes(s,k=5,max_items=60000):
+    # 구버전 호환용. EPUB 최종 유사도에는 아래 semantic shingles를 사용한다.
     words=word_tokens(s)
     if not words:return set()
     if len(words)<=k:return {hash(tuple(words))}
     total=len(words)-k+1; step=max(1,total//max_items)
     return {hash(tuple(words[i:i+k])) for i in range(0,total,step)}
+
+def semantic_compact(s):
+    # 교차 포맷 유사도 전용 정규화.
+    # EPUB/TXT/HWP/DOCX 변환 과정에서 달라지는 공백·개행과 문단 장식 기호는
+    # 점수에서 제외하고 실제 글자(문자/숫자)의 순서만 비교한다.
+    # 상세 비교 화면은 원문을 따로 사용하므로 공백·엔터 차이는 계속 표시된다.
+    return "".join(ch.casefold() for ch in norm(s) if ch.isalnum())
+
+def semantic_shingles(s,k=7,max_items=80000):
+    s=semantic_compact(s)
+    if not s:return set()
+    if len(s)<=k:return {s}
+    total=len(s)-k+1; step=max(1,total//max_items)
+    return {s[i:i+k] for i in range(0,total,step)}
 
 def dice(a,b):
     if not a and not b:return 1.0
@@ -206,7 +221,10 @@ def dice(a,b):
     return 2*len(a&b)/(len(a)+len(b))
 
 def epub_cross_similarity(a,b):
-    return dice(word_shingle_hashes(a),word_shingle_hashes(b))
+    # 5단어 shingle은 구두점/토큰 경계 하나가 여러 조각을 연쇄적으로 깨뜨려
+    # 거의 같은 소설 원문도 과도하게 낮게 평가할 수 있었다.
+    # v26은 포맷 차이를 제거한 7문자 shingle Dice를 사용한다.
+    return dice(semantic_shingles(a),semantic_shingles(b))
 
 def logical_chunks(s):
     s=pair_norm(s)
@@ -727,7 +745,7 @@ class App(tk.Tk):
             # EPUB이 하나라도 있으면 EPUB과 다른 지원 문서 사이에 단어 5-gram 후보를 추가한다.
             epub_ids=[i for i,r in enumerate(valid) if r.ext==".epub"]
             if epub_ids:
-                for i,r in enumerate(valid): wsigs[i]=word_shingle_hashes(r.text,k=5,max_items=8000)
+                for i,r in enumerate(valid): wsigs[i]=semantic_shingles(r.text,k=7,max_items=12000)
                 for i in epub_ids:
                     for j in range(len(valid)):
                         if i==j: continue
@@ -748,8 +766,8 @@ class App(tk.Tk):
                 a,b=valid[i],valid[j]
                 rough=jac(sigs[i],sigs[j])
                 if a.ext==".epub" or b.ext==".epub":
-                    full_i=word_shingle_hashes(a.text,k=5,max_items=60000)
-                    full_j=word_shingle_hashes(b.text,k=5,max_items=60000)
+                    full_i=semantic_shingles(a.text,k=7,max_items=80000)
+                    full_j=semantic_shingles(b.text,k=7,max_items=80000)
                     score=dice(full_i,full_j)
                     if max(rough,score)<max(.20,cut-.50):continue
                 else:
