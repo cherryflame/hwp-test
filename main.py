@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
 
-APP="문서 중복·유사성 검사기 — EPUB 지원판"
+APP="문서 중복·유사성 검사기 — EPUB 교차검증 테스트판"
 
 def resource_path(name):
     base=getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
@@ -190,102 +190,39 @@ def shingles(s,k=9,limit=5000):
     if len(s)<=k:return {s} if s else set()
     step=max(1,(len(s)-k+1)//limit)
     return {s[i:i+k] for i in range(0,len(s)-k+1,step)}
-def word_tokens(s):
-    return re.findall(r"[^\W_]+|[^\w\s]",norm(s),flags=re.UNICODE)
+def semantic_stream(s):
+    # 형식별 줄바꿈/공백/문단 장식 차이에 흔들리지 않는 후보 탐색용 문자 흐름.
+    # 한글/영문/숫자만 남기며 원문과 상세 비교에는 사용하지 않는다.
+    return "".join(ch.lower() for ch in s if ch.isalnum())
 
-def word_shingle_hashes(s,k=5,max_items=60000):
-    # 구버전 호환용. EPUB 최종 유사도에는 아래 semantic shingles를 사용한다.
-    words=word_tokens(s)
-    if not words:return set()
-    if len(words)<=k:return {hash(tuple(words))}
-    total=len(words)-k+1; step=max(1,total//max_items)
-    return {hash(tuple(words[i:i+k])) for i in range(0,total,step)}
-
-def semantic_compact(s):
-    # 교차 포맷 유사도 전용 정규화.
-    # EPUB/TXT/HWP/DOCX 변환 과정에서 달라지는 공백·개행과 문단 장식 기호는
-    # 점수에서 제외하고 실제 글자(문자/숫자)의 순서만 비교한다.
-    # 상세 비교 화면은 원문을 따로 사용하므로 공백·엔터 차이는 계속 표시된다.
-    return "".join(ch.casefold() for ch in norm(s) if ch.isalnum())
-
-def semantic_shingles(s,k=7,max_items=80000):
-    s=semantic_compact(s)
+def semantic_fingerprint(s,k=11,mod=97,limit=2600):
+    """내용 기반 rolling fingerprint. 위치 기반 샘플링이 아니어서 앞부분 삽입/삭제에도 안정적이다."""
+    s=semantic_stream(s)
+    n=len(s)
     if not s:return set()
-    if len(s)<=k:return {s}
-    total=len(s)-k+1; step=max(1,total//max_items)
-    return {s[i:i+k] for i in range(0,total,step)}
+    if n<=k:return {s}
+    base=257; mask=(1<<64)-1
+    power=pow(base,k-1,1<<64)
+    vals=[ord(c)+1 for c in s]
+    h=0
+    for x in vals[:k]:h=((h*base)+x)&mask
+    out=set()
+    def add(i,hv):
+        if hv%mod==0: out.add(s[i:i+k])
+    add(0,h)
+    for i in range(1,n-k+1):
+        h=(h-(vals[i-1]*power))&mask
+        h=((h*base)+vals[i+k-1])&mask
+        add(i,h)
+        if len(out)>=limit:break
+    # 매우 짧거나 우연히 선택점이 없는 문서도 후보가 될 수 있게 양끝 앵커 보강.
+    out.add(s[:k]); out.add(s[-k:])
+    return out
 
 def dice(a,b):
     if not a and not b:return 1.0
     if not a or not b:return 0.0
     return 2*len(a&b)/(len(a)+len(b))
-
-def epub_cross_similarity(a,b):
-    # 5단어 shingle은 구두점/토큰 경계 하나가 여러 조각을 연쇄적으로 깨뜨려
-    # 거의 같은 소설 원문도 과도하게 낮게 평가할 수 있었다.
-    # v26은 포맷 차이를 제거한 7문자 shingle Dice를 사용한다.
-    return dice(semantic_shingles(a),semantic_shingles(b))
-
-
-def semantic_positions(s):
-    """Return semantic text plus original-string positions for each semantic character."""
-    s=pair_norm(s)
-    chars=[]; pos=[]
-    for i,ch in enumerate(s):
-        if ch.isalnum():
-            chars.append(ch.casefold()); pos.append(i)
-    return s,"".join(chars),pos
-
-def epub_resync_chunks(a,b,anchor_len=28,step=220,window=1200):
-    """Fast EPUB cross-format detail alignment.
-
-    Whitespace/punctuation edits must not desynchronise the rest of a long novel.
-    Exact semantic anchors are searched progressively; only the small regions between
-    anchors become change blocks.  No whole-document SequenceMatcher is used.
-    """
-    oa,sa,pa=semantic_positions(a); ob,sb,pb=semantic_positions(b)
-    if not sa or not sb:
-        return [oa],[ob],[('replace',0,1,0,1)]
-    anchors=[]; last_b=0
-    max_a=max(0,len(sa)-anchor_len)
-    for ai in range(0,max_a+1,step):
-        key=sa[ai:ai+anchor_len]
-        if len(key)<anchor_len: break
-        # Prefer a match near the expected position, then fall back to any later match.
-        expected=int(ai*len(sb)/max(1,len(sa)))
-        lo=max(last_b,expected-window); hi=min(len(sb),expected+window+anchor_len)
-        bi=sb.find(key,lo,hi)
-        if bi<0: bi=sb.find(key,last_b)
-        if bi>=last_b:
-            anchors.append((ai,bi)); last_b=bi+anchor_len
-    # Keep anchors monotonic and sufficiently separated.
-    clean=[]; la0=lb0=-10**9
-    for ai,bi in anchors:
-        if ai>la0 and bi>lb0:
-            clean.append((ai,bi)); la0,lb0=ai,bi
-    # Convert semantic boundaries to original-text boundaries.  Each region is small,
-    # so punctuation deletion colours only that region instead of the remainder.
-    bounds=[(0,0)]
-    for ai,bi in clean:
-        if ai<=0 or bi<=0: continue
-        ao=pa[ai]; bo=pb[bi]
-        if ao>bounds[-1][0] and bo>bounds[-1][1]: bounds.append((ao,bo))
-    bounds.append((len(oa),len(ob)))
-    ca=[]; cb=[]; ops=[]
-    for k in range(len(bounds)-1):
-        a1,b1=bounds[k]; a2,b2=bounds[k+1]
-        xa=oa[a1:a2]; xb=ob[b1:b2]
-        ia=len(ca); ib=len(cb); ca.append(xa); cb.append(xb)
-        if xa==xb: tag='equal'
-        elif compact(xa)==compact(xb): tag='replace'  # whitespace-only path in renderer
-        else: tag='replace'
-        ops.append((tag,ia,ia+1,ib,ib+1))
-    return ca,cb,ops
-
-def logical_chunks(s):
-    s=pair_norm(s)
-    parts=re.split(r"(?<=[.!?。！？])(?=\s)|\n{2,}",s)
-    return [x for x in parts if x!=""]
 
 def jac(a,b):return len(a&b)/len(a|b) if a and b else (1 if not a and not b else 0)
 
@@ -469,7 +406,7 @@ class App(tk.Tk):
             ttk.Entry(row,textvariable=self.pair_paths[idx]).pack(side="left",fill="x",expand=True,padx=(0,7))
             self.secondary_button(row,"파일 선택",lambda i=idx:self.pick_pair(i)).pack(side="left")
         action=ttk.Frame(pairtop,style="Card.TFrame");action.pack(fill="x",pady=(8,0))
-        ttk.Label(action,text="HWP 5.x · HWPX · DOCX · TXT / 서로 다른 형식도 본문 비교 가능",style="CardMuted.TLabel").pack(side="left")
+        ttk.Label(action,text="HWP 5.x · HWPX · DOCX · TXT · EPUB / 모든 지원 형식 상호 교차검증",style="CardMuted.TLabel").pack(side="left")
         self.pair_compare_btn=ttk.Button(action,text="두 파일 비교",command=self.compare_pair,style="Primary.TButton");self.pair_compare_btn.pack(side="right")
         self.secondary_button(action,"초기화",self.reset_pair).pack(side="right",padx=(18,8))
 
@@ -601,23 +538,20 @@ class App(tk.Tk):
                 sim=1.0; judge="내용 동일"
             elif ws_only:
                 sim,_=self._ws_similarity(na,nb); judge="공백·줄바꿈 차이"
-            elif ra.ext==".epub" or rb.ext==".epub":
-                sim=epub_cross_similarity(ra.text,rb.text); judge="유사/상이"
             elif len(ca)+len(cb)<600000:
                 sim=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio(); judge="유사/상이"
             else:
                 sim=jac(shingles(ca),shingles(cb)); judge="유사/상이"
 
             self._pair_progress(seq,72,"본문 차이 계산 중")
+            la,lb=na.splitlines(),nb.splitlines()
+            # 공백/줄바꿈만 다른 문서는 줄 정렬 자체가 크게 달라질 수 있으므로
+            # 무거운 줄 SequenceMatcher를 생략하고 선형 공백 비교로 바로 보낸다.
             if ws_only:
-                la,lb=na.splitlines(),nb.splitlines(); ops=[("replace",0,len(la),0,len(lb))]
-            elif ra.ext==".epub" or rb.ext==".epub":
-                # v27: punctuation/line-break deletion must not shift every later sentence.
-                # Progressive semantic anchors re-synchronise the documents every ~220 chars.
-                la,lb,ops=epub_resync_chunks(na,nb)
+                ops=[("replace",0,len(la),0,len(lb))]
             else:
-                la,lb=na.splitlines(),nb.splitlines()
-                ops=difflib.SequenceMatcher(None,la,lb,autojunk=False).get_opcodes()
+                sm=difflib.SequenceMatcher(None,la,lb,autojunk=False)
+                ops=sm.get_opcodes()
             added=removed=changed=0
             for tag,i1,i2,j1,j2 in ops:
                 if tag=="insert":
@@ -777,61 +711,68 @@ class App(tk.Tk):
                         for b in x:
                             if a.path<b.path:claimed.add((a.path,b.path))
             valid=[r for r in rec if r.text and not r.err]; cut=self.scan_cut; edges=[]
-            # 모든 파일쌍을 직접 비교하지 않는다.
-            # 각 문서의 제한된 9글자 조각을 역색인하여 실제로 본문 일부를 공유하는 파일만 후보로 만든다.
+            # v28-1: 모든 지원 형식을 동등하게 후보화한다. 전수 O(n²) 정밀비교는 하지 않는다.
+            # 기존 9글자 shingle 경로 + 형식 차이에 강한 content-defined fingerprint 경로를 병행한다.
             self.q.put(("phase",f"유사 문서 후보를 만드는 중 · {len(valid)}개 문서"))
-            inv=defaultdict(list); sigs=[]; wsigs=[]; lengths=[]
+            inv=defaultdict(list); finv=defaultdict(list)
+            sigs=[]; fps=[]; lengths=[]; sem_lengths=[]
             for idx,r in enumerate(valid):
                 c=compact(r.text); lengths.append(len(c))
                 sg=shingles(c,k=9,limit=1200); sigs.append(sg)
-                wsigs.append(None)
+                fp=semantic_fingerprint(r.text,k=11,mod=97,limit=2600); fps.append(fp)
+                sem_lengths.append(len(semantic_stream(r.text)))
                 for token in sg: inv[token].append(idx)
+                for token in fp: finv[token].append(idx)
 
-            pair_hits=defaultdict(int)
+            pair_hits=defaultdict(int); fp_hits=defaultdict(int)
+            # v23의 빠른 기존 후보 경로 유지
             for ids in inv.values():
                 if len(ids)>80: continue
                 for x in range(len(ids)):
                     for y in range(x+1,len(ids)):
                         i,j=ids[x],ids[y]
-                        if valid[i].ext==".epub" or valid[j].ext==".epub":
+                        if lengths[i] and lengths[j] and min(lengths[i],lengths[j])/max(lengths[i],lengths[j])>=.70:
                             pair_hits[(i,j)]+=1
-                        elif lengths[i] and lengths[j] and min(lengths[i],lengths[j])/max(lengths[i],lengths[j])>=.70:
-                            pair_hits[(i,j)]+=1
+            # 새 공통 교차형식 경로: HWP/HWPX/DOCX/TXT/EPUB 구분 없이 동일 적용
+            for ids in finv.values():
+                if len(ids)>80: continue
+                for x in range(len(ids)):
+                    for y in range(x+1,len(ids)):
+                        i,j=ids[x],ids[y]
+                        if sem_lengths[i] and sem_lengths[j] and min(sem_lengths[i],sem_lengths[j])/max(sem_lengths[i],sem_lengths[j])>=.45:
+                            fp_hits[(i,j)]+=1
 
-            # EPUB이 하나라도 있으면 EPUB과 다른 지원 문서 사이에 단어 5-gram 후보를 추가한다.
-            epub_ids=[i for i,r in enumerate(valid) if r.ext==".epub"]
-            if epub_ids:
-                for i,r in enumerate(valid): wsigs[i]=semantic_shingles(r.text,k=7,max_items=12000)
-                for i in epub_ids:
-                    for j in range(len(valid)):
-                        if i==j: continue
-                        a,b=(i,j) if i<j else (j,i)
-                        pair=tuple(sorted((valid[a].path,valid[b].path)))
-                        if pair in claimed: continue
-                        if wsigs[i] and wsigs[j] and len(wsigs[i]&wsigs[j])>=2:
-                            pair_hits[(a,b)]+=2
+            candidate_set=set()
+            for pair,hits in pair_hits.items():
+                i,j=pair
+                if hits>=2 or min(lengths[i],lengths[j])<120:candidate_set.add(pair)
+            for pair,hits in fp_hits.items():
+                i,j=pair
+                # content-defined fingerprint는 우연 일치 억제를 위해 기본 3개 이상 공유.
+                if hits>=3 or min(sem_lengths[i],sem_lengths[j])<120:candidate_set.add(pair)
 
             candidates=[]
-            for (i,j),hits in pair_hits.items():
+            for i,j in candidate_set:
                 pair=tuple(sorted((valid[i].path,valid[j].path)))
-                if pair in claimed:continue
-                if hits>=2 or min(lengths[i],lengths[j])<120: candidates.append((i,j))
+                if pair not in claimed:candidates.append((i,j))
+            candidates.sort()
             self.q.put(("phase",f"유사도 정밀 비교 중 · 후보 {len(candidates):,}쌍"))
 
             for n,(i,j) in enumerate(candidates,1):
                 a,b=valid[i],valid[j]
                 rough=jac(sigs[i],sigs[j])
-                if a.ext==".epub" or b.ext==".epub":
-                    full_i=semantic_shingles(a.text,k=7,max_items=80000)
-                    full_j=semantic_shingles(b.text,k=7,max_items=80000)
-                    score=dice(full_i,full_j)
-                    if max(rough,score)<max(.20,cut-.50):continue
+                sem=dice(fps[i],fps[j])
+                cross=(a.ext!=b.ext)
+                # 서로 다른 형식은 서식/개행/문단기호 차이를 제거한 fingerprint 점수를 우선한다.
+                # 같은 형식은 v23 판정을 우선하되 fingerprint가 후보 누락을 구제한다.
+                if cross:
+                    score=sem
                 else:
-                    if rough<max(.30,cut-.40):continue
                     ca,cb=compact(a.text),compact(b.text)
+                    if rough<max(.30,cut-.40) and sem<cut:continue
                     if len(ca)+len(cb)<600000:
                         score=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio()
-                    else: score=rough
+                    else: score=max(rough,sem)
                 if score>=cut:edges.append((a,b,score))
                 if n%100==0:self.q.put(("phase",f"유사도 정밀 비교 중 · {n:,}/{len(candidates):,}쌍"))
             for a,b,score in sorted(edges,key=lambda x:-x[2]):groups.append(("유사",score,[a,b]))
