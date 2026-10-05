@@ -226,6 +226,62 @@ def epub_cross_similarity(a,b):
     # v26은 포맷 차이를 제거한 7문자 shingle Dice를 사용한다.
     return dice(semantic_shingles(a),semantic_shingles(b))
 
+
+def semantic_positions(s):
+    """Return semantic text plus original-string positions for each semantic character."""
+    s=pair_norm(s)
+    chars=[]; pos=[]
+    for i,ch in enumerate(s):
+        if ch.isalnum():
+            chars.append(ch.casefold()); pos.append(i)
+    return s,"".join(chars),pos
+
+def epub_resync_chunks(a,b,anchor_len=28,step=220,window=1200):
+    """Fast EPUB cross-format detail alignment.
+
+    Whitespace/punctuation edits must not desynchronise the rest of a long novel.
+    Exact semantic anchors are searched progressively; only the small regions between
+    anchors become change blocks.  No whole-document SequenceMatcher is used.
+    """
+    oa,sa,pa=semantic_positions(a); ob,sb,pb=semantic_positions(b)
+    if not sa or not sb:
+        return [oa],[ob],[('replace',0,1,0,1)]
+    anchors=[]; last_b=0
+    max_a=max(0,len(sa)-anchor_len)
+    for ai in range(0,max_a+1,step):
+        key=sa[ai:ai+anchor_len]
+        if len(key)<anchor_len: break
+        # Prefer a match near the expected position, then fall back to any later match.
+        expected=int(ai*len(sb)/max(1,len(sa)))
+        lo=max(last_b,expected-window); hi=min(len(sb),expected+window+anchor_len)
+        bi=sb.find(key,lo,hi)
+        if bi<0: bi=sb.find(key,last_b)
+        if bi>=last_b:
+            anchors.append((ai,bi)); last_b=bi+anchor_len
+    # Keep anchors monotonic and sufficiently separated.
+    clean=[]; la0=lb0=-10**9
+    for ai,bi in anchors:
+        if ai>la0 and bi>lb0:
+            clean.append((ai,bi)); la0,lb0=ai,bi
+    # Convert semantic boundaries to original-text boundaries.  Each region is small,
+    # so punctuation deletion colours only that region instead of the remainder.
+    bounds=[(0,0)]
+    for ai,bi in clean:
+        if ai<=0 or bi<=0: continue
+        ao=pa[ai]; bo=pb[bi]
+        if ao>bounds[-1][0] and bo>bounds[-1][1]: bounds.append((ao,bo))
+    bounds.append((len(oa),len(ob)))
+    ca=[]; cb=[]; ops=[]
+    for k in range(len(bounds)-1):
+        a1,b1=bounds[k]; a2,b2=bounds[k+1]
+        xa=oa[a1:a2]; xb=ob[b1:b2]
+        ia=len(ca); ib=len(cb); ca.append(xa); cb.append(xb)
+        if xa==xb: tag='equal'
+        elif compact(xa)==compact(xb): tag='replace'  # whitespace-only path in renderer
+        else: tag='replace'
+        ops.append((tag,ia,ia+1,ib,ib+1))
+    return ca,cb,ops
+
 def logical_chunks(s):
     s=pair_norm(s)
     parts=re.split(r"(?<=[.!?。！？])(?=\s)|\n{2,}",s)
@@ -556,9 +612,9 @@ class App(tk.Tk):
             if ws_only:
                 la,lb=na.splitlines(),nb.splitlines(); ops=[("replace",0,len(la),0,len(lb))]
             elif ra.ext==".epub" or rb.ext==".epub":
-                la,lb=logical_chunks(na),logical_chunks(nb)
-                ka,kb=[compact(x) for x in la],[compact(x) for x in lb]
-                ops=difflib.SequenceMatcher(None,ka,kb,autojunk=False).get_opcodes()
+                # v27: punctuation/line-break deletion must not shift every later sentence.
+                # Progressive semantic anchors re-synchronise the documents every ~220 chars.
+                la,lb,ops=epub_resync_chunks(na,nb)
             else:
                 la,lb=na.splitlines(),nb.splitlines()
                 ops=difflib.SequenceMatcher(None,la,lb,autojunk=False).get_opcodes()

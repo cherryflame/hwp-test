@@ -1,4 +1,4 @@
-EPUB 지원판 v26 최종 체크
+EPUB 지원판 v27 최종 체크
 - 기준: v25(기본판 v23 분기)에서 EPUB 교차형식 유사도만 교정
 - HWP/HWPX/DOCX/TXT 비-EPUB 비교 경로 유지
 - EPUB 교차형식: 공백/개행/문단 장식 기호를 제외한 문자 흐름 7-char shingle Dice
@@ -9,3 +9,5 @@ EPUB 지원판 v26 최종 체크
 - Python compile PASS
 - ICO: 16/24/32/48/64/128/256 포함
 - 원본 파일 삭제/이동/수정 없음
+
+[v27] EPUB punctuation/newline deletion resync regression added.
