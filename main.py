@@ -45,7 +45,7 @@ def read_docx(p):
         for n in wanted:
             if n in names:
                 try: out.append(xmltext(z.read(n)))
-                except: pass
+                except Exception: pass
     return "\n".join(out),"DOCX"
 
 def read_hwpx(p):
@@ -231,12 +231,6 @@ def semantic_length_ratio(la,lb):
     if not la and not lb:return 1.0
     if not la or not lb:return 0.0
     return min(la,lb)/max(la,lb)
-
-def final_folder_similarity(fingerprint_score,la,lb):
-    # Candidate discovery and final scoring are deliberately separate.
-    # A fingerprint score can be 1.0 even when a short sentence was omitted between sampled anchors.
-    # The length ratio catches that omission in O(1) without reintroducing whole-document alignment.
-    return min(fingerprint_score, semantic_length_ratio(la,lb))
 
 def shown_group_score(judge,score):
     # Display the real calculated score. A similar pair may legitimately be 100%
@@ -821,40 +815,6 @@ class App(tk.Tk):
                     for line in lb[j1:j2]: tb.insert("end",line+"\n","chg")
         for t in (ta,tb): t.configure(state="disabled")
 
-    def show_side_diff_lines(self,ops,la,lb):
-        ta,tb=self.pair_text
-        for t in (ta,tb):
-            t.configure(state="normal");t.delete("1.0","end")
-            t.tag_configure("same")
-            t.tag_configure("del",background="#ffdede")
-            t.tag_configure("add",background="#dff3df")
-            t.tag_configure("chg",background="#fff0a8")
-        for tag,i1,i2,j1,j2 in ops:
-            taga=tagb="same"
-            if tag=="delete":taga="del"
-            elif tag=="insert":tagb="add"
-            elif tag=="replace":taga=tagb="chg"
-            for line in la[i1:i2]:ta.insert("end",line+"\n",taga)
-            for line in lb[j1:j2]:tb.insert("end",line+"\n",tagb)
-        for t in (ta,tb):t.configure(state="disabled")
-
-    def show_side_diff(self,a,b,sm):
-        ta,tb=self.pair_text
-        for t in (ta,tb):
-            t.configure(state="normal");t.delete("1.0","end")
-            t.tag_configure("same")
-            t.tag_configure("del",background="#ffdede")
-            t.tag_configure("add",background="#dff3df")
-            t.tag_configure("chg",background="#fff0a8")
-        la,lb=norm(a.text).splitlines(),norm(b.text).splitlines()
-        for tag,i1,i2,j1,j2 in sm.get_opcodes():
-            taga=tagb="same"
-            if tag=="delete":taga="del"
-            elif tag=="insert":tagb="add"
-            elif tag=="replace":taga=tagb="chg"
-            for line in la[i1:i2]:ta.insert("end",line+"\n",taga)
-            for line in lb[j1:j2]:tb.insert("end",line+"\n",tagb)
-        for t in (ta,tb):t.configure(state="disabled")
 
     def add(self):
         p=filedialog.askdirectory()
