@@ -1,4 +1,4 @@
-# 문서 중복·유사성 검사기 — EPUB 지원판 v29 재구축
+# 문서 중복·유사성 검사기 — EPUB 지원판 v30
 
 ## 지원 형식
 HWP 5.x / HWPX / DOCX / TXT / EPUB
