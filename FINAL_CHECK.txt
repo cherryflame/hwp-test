@@ -1,7 +1,7 @@
-v28-2 검증
-- 기준: v28-1 (v23 기반 전체 교차형식 후보 탐색)
-- Python 문법 검사 통과
-- Tk UI 생성 smoke test 통과
-- Carmilla EPUB/TXT: fingerprint 유사도 100%, 상세 diff 약 0.56초 (현재 Linux 테스트 환경)
-- 마침표+줄바꿈 삭제 synthetic test: 마침표는 B에만 있음, 줄바꿈/공백은 파랑, 이후 본문 equal 재동기화 확인
-- Windows EXE는 GitHub Actions 빌드 후 실제 Windows 확인 필요
+v28-3 checks
+- Python syntax: PASS
+- whitespace regression: PASS (common newlines uncoloured; only excess newline marked ws)
+- punctuation deletion regression: PASS (punctuation delete + common newline equal)
+- cross-format folder candidate path preserved
+- fingerprint rescue restricted to cross-extension pairs and low-frequency postings
+- original files remain read-only

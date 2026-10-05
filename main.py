@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
 
-APP="문서 중복·유사성 검사기 — EPUB 지원판 v28-2"
+APP="문서 중복·유사성 검사기 — EPUB 지원판 v28-3"
 
 def resource_path(name):
     base=getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
@@ -250,6 +250,16 @@ def _merge_detail_segments(parts):
             out.append((tag,a,b))
     return out
 
+def _whitespace_segments(a,b):
+    """Whitespace runs: leave the common portion uncoloured and mark only the real excess/change."""
+    sm=difflib.SequenceMatcher(None,list(a),list(b),autojunk=False)
+    out=[]
+    for tag,i1,i2,j1,j2 in sm.get_opcodes():
+        aa=a[i1:i2]; bb=b[j1:j2]
+        if tag=='equal': out.append(('equal',aa,bb))
+        else: out.append(('ws',aa,bb))
+    return out
+
 def _local_detail_segments(a,b):
     ta,tb=_detail_tokens(a),_detail_tokens(b)
     ka=[x[0] for x in ta]; kb=[x[0] for x in tb]
@@ -260,12 +270,12 @@ def _local_detail_segments(a,b):
     for tag,i1,i2,j1,j2 in sm.get_opcodes():
         if tag=='equal':
             for (akey,av),(bkey,bv) in zip(ta[i1:i2],tb[j1:j2]):
-                if akey=='WS' and av!=bv: out.append(('ws',av,bv))
+                if akey=='WS' and av!=bv: out.extend(_whitespace_segments(av,bv))
                 else: out.append(('equal',av,bv))
         elif tag=='delete':
-            for key,val in ta[i1:i2]: out.append(('ws',val,'') if key=='WS' else ('delete',val,''))
+            for key,val in ta[i1:i2]: out.extend(_whitespace_segments(val,'')) if key=='WS' else out.append(('delete',val,''))
         elif tag=='insert':
-            for key,val in tb[j1:j2]: out.append(('ws','',val) if key=='WS' else ('insert','',val))
+            for key,val in tb[j1:j2]: out.extend(_whitespace_segments('',val)) if key=='WS' else out.append(('insert','',val))
         else:
             aa=ta[i1:i2]; bb=tb[j1:j2]
             # Keep genuine substitutions yellow, but do not absorb whitespace into them.
@@ -273,13 +283,13 @@ def _local_detail_segments(a,b):
             for n in range(m):
                 ak,av=aa[n]; bk,bv=bb[n]
                 if ak=='WS' or bk=='WS':
-                    if ak=='WS' and bk=='WS': out.append(('ws',av,bv))
+                    if ak=='WS' and bk=='WS': out.extend(_whitespace_segments(av,bv))
                     else:
-                        if ak=='WS': out.append(('ws',av,'')); out.append(('insert','',bv))
-                        else: out.append(('delete',av,'')); out.append(('ws','',bv))
+                        if ak=='WS': out.extend(_whitespace_segments(av,'')); out.append(('insert','',bv))
+                        else: out.append(('delete',av,'')); out.extend(_whitespace_segments('',bv))
                 else: out.append(('replace',av,bv))
-            for key,val in aa[m:]: out.append(('ws',val,'') if key=='WS' else ('delete',val,''))
-            for key,val in bb[m:]: out.append(('ws','',val) if key=='WS' else ('insert','',val))
+            for key,val in aa[m:]: out.extend(_whitespace_segments(val,'')) if key=='WS' else out.append(('delete',val,''))
+            for key,val in bb[m:]: out.extend(_whitespace_segments('',val)) if key=='WS' else out.append(('insert','',val))
     return _merge_detail_segments(out)
 
 def semantic_positions(s):
@@ -848,14 +858,21 @@ class App(tk.Tk):
                         i,j=ids[x],ids[y]
                         if lengths[i] and lengths[j] and min(lengths[i],lengths[j])/max(lengths[i],lengths[j])>=.70:
                             pair_hits[(i,j)]+=1
-            # 새 공통 교차형식 경로: HWP/HWPX/DOCX/TXT/EPUB 구분 없이 동일 적용
+            # v28-3: fingerprint 보조망은 '서로 다른 형식'에만 사용한다.
+            # 같은 형식은 v23 역색인만 사용해 대량 폴더에서 후보 폭증을 막는다.
+            # 너무 흔한 fingerprint는 식별력이 낮으므로 보조망에서 제외한다.
             for ids in finv.values():
-                if len(ids)>80: continue
-                for x in range(len(ids)):
-                    for y in range(x+1,len(ids)):
-                        i,j=ids[x],ids[y]
-                        if sem_lengths[i] and sem_lengths[j] and min(sem_lengths[i],sem_lengths[j])/max(sem_lengths[i],sem_lengths[j])>=.45:
-                            fp_hits[(i,j)]+=1
+                if len(ids)>36: continue
+                by_ext=defaultdict(list)
+                for idx in ids: by_ext[valid[idx].ext].append(idx)
+                exts=list(by_ext)
+                for ex in range(len(exts)):
+                    for ey in range(ex+1,len(exts)):
+                        for ii in by_ext[exts[ex]]:
+                            for jj in by_ext[exts[ey]]:
+                                i,j=(ii,jj) if ii<jj else (jj,ii)
+                                if sem_lengths[i] and sem_lengths[j] and min(sem_lengths[i],sem_lengths[j])/max(sem_lengths[i],sem_lengths[j])>=.45:
+                                    fp_hits[(i,j)]+=1
 
             candidate_set=set()
             for pair,hits in pair_hits.items():
