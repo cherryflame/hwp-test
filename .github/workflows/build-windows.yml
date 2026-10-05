@@ -19,14 +19,14 @@ jobs:
         run: python -m pip install -r requirements.txt
 
       - name: Build EXE
-        run: pyinstaller --noconfirm --clean --onefile --windowed --collect-all syhwp --icon=app.ico --add-data "app.ico;." --add-data "app_icon_16.png;." --add-data "app_icon_32.png;." --add-data "app_icon_48.png;." --add-data "app_icon_64.png;." --name 문서_중복_유사성_검사기_EPUB_지원판 main.py
+        run: pyinstaller --noconfirm --clean --onefile --windowed --collect-all syhwp --icon=app.ico --add-data "app.ico;." --add-data "app_icon_16.png;." --add-data "app_icon_32.png;." --add-data "app_icon_48.png;." --add-data "app_icon_64.png;." --name 문서_중복_유사성_검사기_EPUB_교차검증_테스트판 main.py
 
 
       - name: Verify EXE icon resource
         shell: python
         run: |
           import pefile, sys
-          exe = r"dist\문서_중복_유사성_검사기_EPUB_지원판.exe"
+          exe = r"dist\문서_중복_유사성_검사기_EPUB_교차검증_테스트판.exe"
           pe = pefile.PE(exe)
           types = set()
           for entry in pe.DIRECTORY_ENTRY_RESOURCE.entries:
@@ -40,5 +40,5 @@ jobs:
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: 문서_중복_유사성_검사기_EPUB_지원판_Windows
-          path: dist/문서_중복_유사성_검사기_EPUB_지원판.exe
+          name: 문서_중복_유사성_검사기_EPUB_교차검증_테스트판_Windows
+          path: dist/문서_중복_유사성_검사기_EPUB_교차검증_테스트판.exe
