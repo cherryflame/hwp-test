@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
 
-APP="문서 중복·유사성 검사기 — EPUB 지원판 v31 상세 비교 블록 판정"
+APP="문서 중복·유사성 검사기 v1.0"
 
 def resource_path(name):
     base=getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
@@ -239,11 +239,16 @@ def final_folder_similarity(fingerprint_score,la,lb):
     return min(fingerprint_score, semantic_length_ratio(la,lb))
 
 def shown_group_score(judge,score):
-    # Keep the real score for thresholding/sorting. Only the UI/CSV representation of a 'similar'
-    # 100% result is capped so 100% remains visually reserved for exact/content-identical groups.
-    pct=score*100
-    if judge=='유사' and pct>=100.0-1e-9:return 99.9
-    return pct
+    # Display the real calculated score. A similar pair may legitimately be 100%
+    # under the folder-search similarity metric even when detailed comparison finds
+    # small word/whitespace/line-break differences.
+    return score*100
+
+def group_score_text(judge,score):
+    pct=shown_group_score(judge,score)
+    if pct>=100.0-1e-9:
+        return "100%"
+    return f"{pct:.1f}%"
 
 
 def _detail_tokens(s):
@@ -1053,7 +1058,7 @@ class App(tk.Tk):
         for gi,(j,score,rs) in enumerate(self.groups,1):
             if self.active_filter not in ("전체",j):continue
             tag={"완전 동일":"exact","내용 동일":"content","유사":"similar"}.get(j,"")
-            root=self.tree.insert("","end",text=str(gi),values=(j,f"{shown_group_score(j,score):.1f}%","","","","",""),open=True,tags=(tag,))
+            root=self.tree.insert("","end",text=str(gi),values=(j,group_score_text(j,score),"","","","",""),open=True,tags=(tag,))
             for r in rs:
                 self.tree.insert(root,"end",values=("","",display_safe(r.name),r.kind,self.sz(r.size),
                     time.strftime("%Y-%m-%d %H:%M",time.localtime(r.mtime)),display_safe(r.path)))
