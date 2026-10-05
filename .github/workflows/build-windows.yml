@@ -18,27 +18,46 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Build EXE
-        run: pyinstaller --noconfirm --clean --onefile --windowed --collect-all syhwp --icon=app.ico --add-data "app.ico;." --add-data "app_icon_16.png;." --add-data "app_icon_32.png;." --add-data "app_icon_48.png;." --add-data "app_icon_64.png;." --name 문서_중복_유사성_검사기_v1.0 main.py
+      - name: Build Windows folder
+        shell: powershell
+        run: |
+          pyinstaller --noconfirm --clean --onedir --windowed --noupx `
+            --collect-all syhwp `
+            --icon=app.ico `
+            --version-file=version_info.txt `
+            --add-data "app.ico;." `
+            --add-data "app_icon_16.png;." `
+            --add-data "app_icon_24.png;." `
+            --add-data "app_icon_32.png;." `
+            --add-data "app_icon_48.png;." `
+            --add-data "app_icon_64.png;." `
+            --name "문서_중복_유사성_검사기_v1.0" main.py
 
-
-      - name: Verify EXE icon resource
+      - name: Verify EXE resources and version metadata
         shell: python
         run: |
-          import pefile, sys
-          exe = r"dist\문서_중복_유사성_검사기_v1.0.exe"
+          import pefile
+          exe = r"dist\문서_중복_유사성_검사기_v1.0\문서_중복_유사성_검사기_v1.0.exe"
           pe = pefile.PE(exe)
-          types = set()
-          for entry in pe.DIRECTORY_ENTRY_RESOURCE.entries:
-              if entry.id is not None:
-                  types.add(entry.id)
-          # Windows: RT_ICON=3, RT_GROUP_ICON=14
+          types = {e.id for e in pe.DIRECTORY_ENTRY_RESOURCE.entries if e.id is not None}
           if 3 not in types or 14 not in types:
               raise SystemExit(f"Icon resource missing: {sorted(types)}")
-          print("EXE icon resources verified:", sorted(types))
+          if 16 not in types:
+              raise SystemExit(f"Version resource missing: {sorted(types)}")
+          print("EXE resources verified:", sorted(types))
 
-      - name: Upload EXE
+      - name: Create release ZIP and SHA-256
+        shell: powershell
+        run: |
+          $folder = "dist\문서_중복_유사성_검사기_v1.0"
+          $zip = "dist\문서_중복_유사성_검사기_v1.0_Windows.zip"
+          Compress-Archive -Path "$folder\*" -DestinationPath $zip -Force
+          (Get-FileHash $zip -Algorithm SHA256).Hash + "  " + (Split-Path $zip -Leaf) | Out-File -Encoding ascii "dist\SHA256.txt"
+
+      - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
           name: 문서_중복_유사성_검사기_v1.0_Windows
-          path: dist/문서_중복_유사성_검사기_v1.0.exe
+          path: |
+            dist/문서_중복_유사성_검사기_v1.0_Windows.zip
+            dist/SHA256.txt
