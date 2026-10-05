@@ -1,13 +1,7 @@
-EPUB 지원판 v27 최종 체크
-- 기준: v25(기본판 v23 분기)에서 EPUB 교차형식 유사도만 교정
-- HWP/HWPX/DOCX/TXT 비-EPUB 비교 경로 유지
-- EPUB 교차형식: 공백/개행/문단 장식 기호를 제외한 문자 흐름 7-char shingle Dice
-- 장문 전체 문자 SequenceMatcher를 EPUB 최종 유사도에 사용하지 않음
-- EPUB 후보 탐색도 동일 semantic shingle 신호 사용
-- 단일 폴더 EPUB+TXT 카밀라 테스트: 유사 100%, 약 0.36초(현재 Linux 테스트 환경)
-- Tk UI 생성 smoke test PASS
-- Python compile PASS
-- ICO: 16/24/32/48/64/128/256 포함
-- 원본 파일 삭제/이동/수정 없음
-
-[v27] EPUB punctuation/newline deletion resync regression added.
+v28-2 검증
+- 기준: v28-1 (v23 기반 전체 교차형식 후보 탐색)
+- Python 문법 검사 통과
+- Tk UI 생성 smoke test 통과
+- Carmilla EPUB/TXT: fingerprint 유사도 100%, 상세 diff 약 0.56초 (현재 Linux 테스트 환경)
+- 마침표+줄바꿈 삭제 synthetic test: 마침표는 B에만 있음, 줄바꿈/공백은 파랑, 이후 본문 equal 재동기화 확인
+- Windows EXE는 GitHub Actions 빌드 후 실제 Windows 확인 필요

@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
 
-APP="문서 중복·유사성 검사기 — EPUB 교차검증 테스트판"
+APP="문서 중복·유사성 검사기 — EPUB 지원판 v28-2"
 
 def resource_path(name):
     base=getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
@@ -223,6 +223,99 @@ def dice(a,b):
     if not a and not b:return 1.0
     if not a or not b:return 0.0
     return 2*len(a&b)/(len(a)+len(b))
+
+
+def _detail_tokens(s):
+    """Whitespace runs are one logical token; visible characters remain individual tokens."""
+    out=[]; buf=[]
+    def flush():
+        nonlocal buf
+        if buf:
+            out.append(("WS","".join(buf))); buf=[]
+    for ch in s:
+        if ch.isspace():
+            buf.append(ch)
+        else:
+            flush(); out.append((ch,ch))
+    flush()
+    return out
+
+def _merge_detail_segments(parts):
+    out=[]
+    for tag,a,b in parts:
+        if not a and not b: continue
+        if out and out[-1][0]==tag:
+            ot,oa,ob=out[-1]; out[-1]=(ot,oa+a,ob+b)
+        else:
+            out.append((tag,a,b))
+    return out
+
+def _local_detail_segments(a,b):
+    ta,tb=_detail_tokens(a),_detail_tokens(b)
+    ka=[x[0] for x in ta]; kb=[x[0] for x in tb]
+    # Resynchronised regions are normally only a few hundred characters.
+    # autojunk=False gives correct punctuation insert/delete classification on these small regions.
+    sm=difflib.SequenceMatcher(None,ka,kb,autojunk=False)
+    out=[]
+    for tag,i1,i2,j1,j2 in sm.get_opcodes():
+        if tag=='equal':
+            for (akey,av),(bkey,bv) in zip(ta[i1:i2],tb[j1:j2]):
+                if akey=='WS' and av!=bv: out.append(('ws',av,bv))
+                else: out.append(('equal',av,bv))
+        elif tag=='delete':
+            for key,val in ta[i1:i2]: out.append(('ws',val,'') if key=='WS' else ('delete',val,''))
+        elif tag=='insert':
+            for key,val in tb[j1:j2]: out.append(('ws','',val) if key=='WS' else ('insert','',val))
+        else:
+            aa=ta[i1:i2]; bb=tb[j1:j2]
+            # Keep genuine substitutions yellow, but do not absorb whitespace into them.
+            m=min(len(aa),len(bb))
+            for n in range(m):
+                ak,av=aa[n]; bk,bv=bb[n]
+                if ak=='WS' or bk=='WS':
+                    if ak=='WS' and bk=='WS': out.append(('ws',av,bv))
+                    else:
+                        if ak=='WS': out.append(('ws',av,'')); out.append(('insert','',bv))
+                        else: out.append(('delete',av,'')); out.append(('ws','',bv))
+                else: out.append(('replace',av,bv))
+            for key,val in aa[m:]: out.append(('ws',val,'') if key=='WS' else ('delete',val,''))
+            for key,val in bb[m:]: out.append(('ws','',val) if key=='WS' else ('insert','',val))
+    return _merge_detail_segments(out)
+
+def semantic_positions(s):
+    s=pair_norm(s); chars=[]; pos=[]
+    for i,ch in enumerate(s):
+        if ch.isalnum(): chars.append(ch.casefold()); pos.append(i)
+    return s,"".join(chars),pos
+
+def resync_detail_segments(a,b,anchor_len=32,step=260,window=1600):
+    """Fast cross-format detail diff with progressive semantic re-synchronisation."""
+    oa,sa,pa=semantic_positions(a); ob,sb,pb=semantic_positions(b)
+    if not sa or not sb: return _local_detail_segments(oa,ob)
+    anchors=[]; last_b=0
+    for ai in range(0,max(0,len(sa)-anchor_len)+1,step):
+        key=sa[ai:ai+anchor_len]
+        if len(key)<anchor_len: break
+        expected=int(ai*len(sb)/max(1,len(sa)))
+        lo=max(last_b,expected-window); hi=min(len(sb),expected+window+anchor_len)
+        bi=sb.find(key,lo,hi)
+        if bi<0: bi=sb.find(key,last_b)
+        if bi>=last_b:
+            anchors.append((ai,bi)); last_b=bi+anchor_len
+    bounds=[(0,0)]
+    lasta=lastb=0
+    for ai,bi in anchors:
+        if ai<=0 or bi<=0: continue
+        ao,bo=pa[ai],pb[bi]
+        if ao>lasta and bo>lastb:
+            bounds.append((ao,bo)); lasta,lastb=ao,bo
+    bounds.append((len(oa),len(ob)))
+    parts=[]
+    for (a1,b1),(a2,b2) in zip(bounds,bounds[1:]):
+        xa,xb=oa[a1:a2],ob[b1:b2]
+        if xa==xb: parts.append(('equal',xa,xb))
+        else: parts.extend(_local_detail_segments(xa,xb))
+    return _merge_detail_segments(parts)
 
 def jac(a,b):return len(a&b)/len(a|b) if a and b else (1 if not a and not b else 0)
 
@@ -528,44 +621,48 @@ class App(tk.Tk):
 
             na,nb=pair_norm(ra.text),pair_norm(rb.text)
             ca,cb=compact(ra.text),compact(rb.text)
-            exact=ra.hash==rb.hash
+            exact=ra.hash==rb.hash; cross=(ra.ext!=rb.ext)
             self._pair_progress(seq,55,"유사도 계산 중")
-            ws_only=(ca==cb and na!=nb)
-            ws_gap_count=0
+            ws_only=(ca==cb and na!=nb); ws_gap_count=0
             if exact:
                 sim=1.0; judge="완전 동일"
             elif na==nb:
                 sim=1.0; judge="내용 동일"
             elif ws_only:
                 sim,_=self._ws_similarity(na,nb); judge="공백·줄바꿈 차이"
+            elif cross:
+                # Folder scan and A/B comparison use the same cross-format fingerprint metric.
+                sim=dice(semantic_fingerprint(ra.text),semantic_fingerprint(rb.text)); judge="유사/상이"
             elif len(ca)+len(cb)<600000:
                 sim=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio(); judge="유사/상이"
             else:
                 sim=jac(shingles(ca),shingles(cb)); judge="유사/상이"
 
-            self._pair_progress(seq,72,"본문 차이 계산 중")
-            la,lb=na.splitlines(),nb.splitlines()
-            # 공백/줄바꿈만 다른 문서는 줄 정렬 자체가 크게 달라질 수 있으므로
-            # 무거운 줄 SequenceMatcher를 생략하고 선형 공백 비교로 바로 보낸다.
-            if ws_only:
-                ops=[("replace",0,len(la),0,len(lb))]
+            self._pair_progress(seq,70,"본문 재정렬 중")
+            if cross:
+                segments=resync_detail_segments(na,nb)
+            elif ws_only:
+                segments=_local_detail_segments(na,nb)
             else:
-                sm=difflib.SequenceMatcher(None,la,lb,autojunk=False)
-                ops=sm.get_opcodes()
+                # Preserve the proven v23 line path for same-format documents.
+                la0,lb0=na.splitlines(True),nb.splitlines(True)
+                sm=difflib.SequenceMatcher(None,la0,lb0,autojunk=False)
+                segments=[]
+                for tag,i1,i2,j1,j2 in sm.get_opcodes():
+                    aa=''.join(la0[i1:i2]); bb=''.join(lb0[j1:j2])
+                    if tag=='equal': segments.append(('equal',aa,bb))
+                    else: segments.extend(_local_detail_segments(aa,bb))
+                segments=_merge_detail_segments(segments)
+
+            self._pair_progress(seq,88,"차이 분류 중")
             added=removed=changed=0
-            for tag,i1,i2,j1,j2 in ops:
-                if tag=="insert":
-                    added+=j2-j1
-                elif tag=="delete":
-                    removed+=i2-i1
-                elif tag=="replace":
-                    block_a="\n".join(la[i1:i2]); block_b="\n".join(lb[j1:j2])
-                    if compact(block_a)==compact(block_b):
-                        _,d=self._ws_similarity(block_a,block_b); ws_gap_count+=d
-                    else:
-                        changed+=max(i2-i1,j2-j1)
-            self._pair_progress(seq,92,"결과 정리 중")
-            self.q.put(("pairdone",seq,ra,rb,sim,judge,added,removed,changed,ops,la,lb,ws_gap_count))
+            for tag,aa,bb in segments:
+                if tag=='insert': added+=max(1,bb.count('\n') or 1)
+                elif tag=='delete': removed+=max(1,aa.count('\n') or 1)
+                elif tag=='replace': changed+=max(1,aa.count('\n'),bb.count('\n'))
+                elif tag=='ws': ws_gap_count+=1
+            self._pair_progress(seq,95,"결과 정리 중")
+            self.q.put(("pairdone",seq,ra,rb,sim,judge,added,removed,changed,segments,[],[],ws_gap_count))
         except Exception as e:
             self.q.put(("pairfatal",seq,str(e)))
 
@@ -575,11 +672,29 @@ class App(tk.Tk):
         self.pair_summary["text"]=(f"{judge}  ·  유사도 {sim*100:.2f}%  ·  "
             f"A {len(pair_norm(ra.text)):,}자 / B {len(pair_norm(rb.text)):,}자  ·  "
             f"추가 {added}줄 / 삭제 {removed}줄 / 변경 {changed}줄{extra}")
-        self.show_side_diff_mixed(ops,la,lb)
+        self.show_detail_segments(ops) if not la and not lb else self.show_side_diff_mixed(ops,la,lb)
         self.pair_note["text"]=(f"A: {ra.kind} · {self.sz(ra.size)}     B: {rb.kind} · {self.sz(rb.size)}  ·  "
                                 "공백은 ·, 줄바꿈은 ↵로 표시")
         self.pair_progress.set(100); self.pair_progress_text["text"]="완료 · 100%"
         self.pair_compare_btn["state"]="normal"
+
+    def show_detail_segments(self,segments):
+        ta,tb=self.pair_text
+        for t in (ta,tb):
+            t.configure(state="normal"); t.delete("1.0","end")
+            t.tag_configure("same")
+            t.tag_configure("del",background="#ffdede")
+            t.tag_configure("add",background="#dff3df")
+            t.tag_configure("chg",background="#fff0a8")
+            t.tag_configure("ws",background="#dcecff",foreground="#315b7b")
+        for tag,a,b in segments:
+            if tag=='equal': ta.insert('end',a,'same'); tb.insert('end',b,'same')
+            elif tag=='delete': ta.insert('end',a,'del')
+            elif tag=='insert': tb.insert('end',b,'add')
+            elif tag=='replace': ta.insert('end',a,'chg'); tb.insert('end',b,'chg')
+            elif tag=='ws':
+                ta.insert('end',self._ws_visible(a),'ws'); tb.insert('end',self._ws_visible(b),'ws')
+        for t in (ta,tb): t.configure(state="disabled")
 
     def _insert_ws_pair(self,ta,tb,a,b):
         core_a,gaps_a=self._ws_gaps(a); core_b,gaps_b=self._ws_gaps(b)
