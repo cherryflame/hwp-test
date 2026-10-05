@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
 
-APP="문서 중복·유사성 검사기 — EPUB 지원판 v30 유사도 산식 수정"
+APP="문서 중복·유사성 검사기 — EPUB 지원판 v31 상세 비교 블록 판정"
 
 def resource_path(name):
     base=getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
@@ -301,9 +301,11 @@ def _local_detail_segments(a,b):
                 if akey=='WS' and av!=bv: out.extend(_ws_delta_segments(av,bv))
                 else: out.append(('equal',av,bv))
         elif tag=='delete':
-            for key,val in ta[i1:i2]: out.append(('ws',val,'') if key=='WS' else ('delete',val,''))
+            chunk=ta[i1:i2]; ws_only=all(key=='WS' for key,val in chunk)
+            for key,val in chunk: out.append(('ws',val,'') if ws_only else ('delete',val,''))
         elif tag=='insert':
-            for key,val in tb[j1:j2]: out.append(('ws','',val) if key=='WS' else ('insert','',val))
+            chunk=tb[j1:j2]; ws_only=all(key=='WS' for key,val in chunk)
+            for key,val in chunk: out.append(('ws','',val) if ws_only else ('insert','',val))
         else:
             aa=ta[i1:i2]; bb=tb[j1:j2]
             # Keep genuine substitutions yellow, but do not absorb whitespace into them.
@@ -316,9 +318,40 @@ def _local_detail_segments(a,b):
                         if ak=='WS': out.append(('ws',av,'')); out.append(('insert','',bv))
                         else: out.append(('delete',av,'')); out.append(('ws','',bv))
                 else: out.append(('replace',av,bv))
-            for key,val in aa[m:]: out.append(('ws',val,'') if key=='WS' else ('delete',val,''))
-            for key,val in bb[m:]: out.append(('ws','',val) if key=='WS' else ('insert','',val))
+            tail=aa[m:]; ws_only=bool(tail) and all(key=='WS' for key,val in tail)
+            for key,val in tail: out.append(('ws',val,'') if ws_only else ('delete',val,''))
+            tail=bb[m:]; ws_only=bool(tail) and all(key=='WS' for key,val in tail)
+            for key,val in tail: out.append(('ws','',val) if ws_only else ('insert','',val))
     return _merge_detail_segments(out)
+
+def _visible_for_block_score(s):
+    """Comparison text for deciding whether a changed block is a rewrite or a small edit."""
+    # Whitespace is formatting here; punctuation remains meaningful enough to distinguish edits.
+    return "".join(ch.casefold() for ch in s if not ch.isspace())
+
+def _changed_block_similarity(a,b):
+    aa=_visible_for_block_score(a); bb=_visible_for_block_score(b)
+    if not aa and not bb: return 1.0
+    if not aa or not bb: return 0.0
+    # Length mismatch is evidence too, but SequenceMatcher catches retained phrases in partial edits.
+    return difflib.SequenceMatcher(None,aa,bb,autojunk=True).ratio()
+
+def _detail_block_segments(a,b,rewrite_threshold=0.48,min_rewrite_chars=20):
+    """Hierarchical gate: classify a changed block before character-level diffing.
+
+    One-sided blocks stay wholly red/green (including their whitespace). Two substantial,
+    low-similarity blocks are a replacement and stay wholly yellow. Only genuinely similar
+    blocks are allowed into the fine-grained character/whitespace analyser.
+    """
+    if not a and not b: return []
+    if not b: return [('delete',a,'')]
+    if not a: return [('insert','',b)]
+    if a==b: return [('equal',a,b)]
+    va=_visible_for_block_score(a); vb=_visible_for_block_score(b)
+    if min(len(va),len(vb))>=min_rewrite_chars:
+        if _changed_block_similarity(a,b)<rewrite_threshold:
+            return [('replace',a,b)]
+    return _local_detail_segments(a,b)
 
 def semantic_positions(s):
     s=pair_norm(s); chars=[]; pos=[]
@@ -329,7 +362,7 @@ def semantic_positions(s):
 def resync_detail_segments(a,b,anchor_len=32,step=260,window=1600):
     """Fast cross-format detail diff with progressive semantic re-synchronisation."""
     oa,sa,pa=semantic_positions(a); ob,sb,pb=semantic_positions(b)
-    if not sa or not sb: return _local_detail_segments(oa,ob)
+    if not sa or not sb: return _detail_block_segments(oa,ob)
     anchors=[]; last_b=0
     for ai in range(0,max(0,len(sa)-anchor_len)+1,step):
         key=sa[ai:ai+anchor_len]
@@ -352,7 +385,7 @@ def resync_detail_segments(a,b,anchor_len=32,step=260,window=1600):
     for (a1,b1),(a2,b2) in zip(bounds,bounds[1:]):
         xa,xb=oa[a1:a2],ob[b1:b2]
         if xa==xb: parts.append(('equal',xa,xb))
-        else: parts.extend(_local_detail_segments(xa,xb))
+        else: parts.extend(_detail_block_segments(xa,xb))
     return _merge_detail_segments(parts)
 
 def jac(a,b):return len(a&b)/len(a|b) if a and b else (1 if not a and not b else 0)
@@ -689,7 +722,7 @@ class App(tk.Tk):
                 for tag,i1,i2,j1,j2 in sm.get_opcodes():
                     aa=''.join(la0[i1:i2]); bb=''.join(lb0[j1:j2])
                     if tag=='equal': segments.append(('equal',aa,bb))
-                    else: segments.extend(_local_detail_segments(aa,bb))
+                    else: segments.extend(_detail_block_segments(aa,bb))
                 segments=_merge_detail_segments(segments)
 
             self._pair_progress(seq,88,"차이 분류 중")
