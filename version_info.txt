@@ -1,0 +1,29 @@
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '041204B0',
+        [
+          StringStruct('CompanyName', 'Personal Utility'),
+          StringStruct('FileDescription', '문서 중복·유사성 검사기'),
+          StringStruct('FileVersion', '1.0.0.0'),
+          StringStruct('InternalName', 'DocumentSimilarityChecker'),
+          StringStruct('OriginalFilename', '문서_중복_유사성_검사기_v1.0.exe'),
+          StringStruct('ProductName', '문서 중복·유사성 검사기'),
+          StringStruct('ProductVersion', '1.0.0.0')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [1042, 1200])])
+  ]
+)

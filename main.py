@@ -10,6 +10,16 @@ import tkinter.font as tkfont
 
 APP="문서 중복·유사성 검사기 v1.0"
 
+# Windows 작업표시줄이 Python/Tk 기본 아이콘이 아니라 이 앱의 EXE 아이콘을 사용하도록 고유 ID를 지정합니다.
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "SianK.DocumentSimilarityChecker.1.0"
+        )
+    except Exception:
+        pass
+
 def resource_path(name):
     base=getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base,name)
@@ -403,7 +413,7 @@ class App(tk.Tk):
         except Exception:
             pass
         try:
-            self._app_icon_images=[tk.PhotoImage(file=resource_path(f"app_icon_{n}.png")) for n in (16,32,48,64)]
+            self._app_icon_images=[tk.PhotoImage(file=resource_path(f"app_icon_{n}.png")) for n in (64,48,32,24,16)]
             self.iconphoto(True,*self._app_icon_images)
         except Exception:
             self._app_icon_images=[]
