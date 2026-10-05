@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
 
-APP="문서 중복·유사성 검사기 — EPUB 지원판 v28-3"
+APP="문서 중복·유사성 검사기 — EPUB 지원판 v29 재구축"
 
 def resource_path(name):
     base=getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
@@ -250,15 +250,22 @@ def _merge_detail_segments(parts):
             out.append((tag,a,b))
     return out
 
-def _whitespace_segments(a,b):
-    """Whitespace runs: leave the common portion uncoloured and mark only the real excess/change."""
+def _ws_delta_segments(a,b):
+    """Whitespace runs: keep the common part uncoloured and mark only added/removed whitespace."""
+    if a==b:
+        return [('equal',a,b)] if a else []
     sm=difflib.SequenceMatcher(None,list(a),list(b),autojunk=False)
     out=[]
     for tag,i1,i2,j1,j2 in sm.get_opcodes():
         aa=a[i1:i2]; bb=b[j1:j2]
         if tag=='equal': out.append(('equal',aa,bb))
-        else: out.append(('ws',aa,bb))
-    return out
+        elif tag=='delete': out.append(('ws',aa,''))
+        elif tag=='insert': out.append(('ws','',bb))
+        else:
+            # Different whitespace characters are both formatting-only differences.
+            if aa: out.append(('ws',aa,''))
+            if bb: out.append(('ws','',bb))
+    return _merge_detail_segments(out)
 
 def _local_detail_segments(a,b):
     ta,tb=_detail_tokens(a),_detail_tokens(b)
@@ -270,12 +277,12 @@ def _local_detail_segments(a,b):
     for tag,i1,i2,j1,j2 in sm.get_opcodes():
         if tag=='equal':
             for (akey,av),(bkey,bv) in zip(ta[i1:i2],tb[j1:j2]):
-                if akey=='WS' and av!=bv: out.extend(_whitespace_segments(av,bv))
+                if akey=='WS' and av!=bv: out.extend(_ws_delta_segments(av,bv))
                 else: out.append(('equal',av,bv))
         elif tag=='delete':
-            for key,val in ta[i1:i2]: out.extend(_whitespace_segments(val,'')) if key=='WS' else out.append(('delete',val,''))
+            for key,val in ta[i1:i2]: out.append(('ws',val,'') if key=='WS' else ('delete',val,''))
         elif tag=='insert':
-            for key,val in tb[j1:j2]: out.extend(_whitespace_segments('',val)) if key=='WS' else out.append(('insert','',val))
+            for key,val in tb[j1:j2]: out.append(('ws','',val) if key=='WS' else ('insert','',val))
         else:
             aa=ta[i1:i2]; bb=tb[j1:j2]
             # Keep genuine substitutions yellow, but do not absorb whitespace into them.
@@ -283,13 +290,13 @@ def _local_detail_segments(a,b):
             for n in range(m):
                 ak,av=aa[n]; bk,bv=bb[n]
                 if ak=='WS' or bk=='WS':
-                    if ak=='WS' and bk=='WS': out.extend(_whitespace_segments(av,bv))
+                    if ak=='WS' and bk=='WS': out.extend(_ws_delta_segments(av,bv))
                     else:
-                        if ak=='WS': out.extend(_whitespace_segments(av,'')); out.append(('insert','',bv))
-                        else: out.append(('delete',av,'')); out.extend(_whitespace_segments('',bv))
+                        if ak=='WS': out.append(('ws',av,'')); out.append(('insert','',bv))
+                        else: out.append(('delete',av,'')); out.append(('ws','',bv))
                 else: out.append(('replace',av,bv))
-            for key,val in aa[m:]: out.extend(_whitespace_segments(val,'')) if key=='WS' else out.append(('delete',val,''))
-            for key,val in bb[m:]: out.extend(_whitespace_segments('',val)) if key=='WS' else out.append(('insert','',val))
+            for key,val in aa[m:]: out.append(('ws',val,'') if key=='WS' else ('delete',val,''))
+            for key,val in bb[m:]: out.append(('ws','',val) if key=='WS' else ('insert','',val))
     return _merge_detail_segments(out)
 
 def semantic_positions(s):
@@ -836,21 +843,21 @@ class App(tk.Tk):
                         for b in x:
                             if a.path<b.path:claimed.add((a.path,b.path))
             valid=[r for r in rec if r.text and not r.err]; cut=self.scan_cut; edges=[]
-            # v28-1: 모든 지원 형식을 동등하게 후보화한다. 전수 O(n²) 정밀비교는 하지 않는다.
-            # 기존 9글자 shingle 경로 + 형식 차이에 강한 content-defined fingerprint 경로를 병행한다.
+            # v29: 형식별 예외망 없이 하나의 공통 검색용 fingerprint를 사용한다.
+            # v23의 검증된 후보망은 그대로 두고, 공통 fingerprint는 문서별 상위 소수 후보만 보강한다.
             self.q.put(("phase",f"유사 문서 후보를 만드는 중 · {len(valid)}개 문서"))
             inv=defaultdict(list); finv=defaultdict(list)
             sigs=[]; fps=[]; lengths=[]; sem_lengths=[]
             for idx,r in enumerate(valid):
                 c=compact(r.text); lengths.append(len(c))
                 sg=shingles(c,k=9,limit=1200); sigs.append(sg)
-                fp=semantic_fingerprint(r.text,k=11,mod=97,limit=2600); fps.append(fp)
+                fp=semantic_fingerprint(r.text,k=11,mod=97,limit=1800); fps.append(fp)
                 sem_lengths.append(len(semantic_stream(r.text)))
                 for token in sg: inv[token].append(idx)
                 for token in fp: finv[token].append(idx)
 
-            pair_hits=defaultdict(int); fp_hits=defaultdict(int)
-            # v23의 빠른 기존 후보 경로 유지
+            # 1) v23 후보망: 기존 성능 특성을 유지한다.
+            pair_hits=defaultdict(int)
             for ids in inv.values():
                 if len(ids)>80: continue
                 for x in range(len(ids)):
@@ -858,53 +865,60 @@ class App(tk.Tk):
                         i,j=ids[x],ids[y]
                         if lengths[i] and lengths[j] and min(lengths[i],lengths[j])/max(lengths[i],lengths[j])>=.70:
                             pair_hits[(i,j)]+=1
-            # v28-3: fingerprint 보조망은 '서로 다른 형식'에만 사용한다.
-            # 같은 형식은 v23 역색인만 사용해 대량 폴더에서 후보 폭증을 막는다.
-            # 너무 흔한 fingerprint는 식별력이 낮으므로 보조망에서 제외한다.
-            for ids in finv.values():
-                if len(ids)>36: continue
-                by_ext=defaultdict(list)
-                for idx in ids: by_ext[valid[idx].ext].append(idx)
-                exts=list(by_ext)
-                for ex in range(len(exts)):
-                    for ey in range(ex+1,len(exts)):
-                        for ii in by_ext[exts[ex]]:
-                            for jj in by_ext[exts[ey]]:
-                                i,j=(ii,jj) if ii<jj else (jj,ii)
-                                if sem_lengths[i] and sem_lengths[j] and min(sem_lengths[i],sem_lengths[j])/max(sem_lengths[i],sem_lengths[j])>=.45:
-                                    fp_hits[(i,j)]+=1
-
-            candidate_set=set()
+            base_candidates=set()
             for pair,hits in pair_hits.items():
                 i,j=pair
-                if hits>=2 or min(lengths[i],lengths[j])<120:candidate_set.add(pair)
-            for pair,hits in fp_hits.items():
-                i,j=pair
-                # content-defined fingerprint는 우연 일치 억제를 위해 기본 3개 이상 공유.
-                if hits>=3 or min(sem_lengths[i],sem_lengths[j])<120:candidate_set.add(pair)
+                if hits>=2 or min(lengths[i],lengths[j])<120: base_candidates.add(pair)
 
+            # 2) 공통 교차형식 보강: fingerprint 조합을 전부 만들지 않는다.
+            # 각 문서가 공유하는 희귀 fingerprint만 세고 상위 6개 후보만 추가한다.
+            # 따라서 700개 문서라도 보강 후보는 이론상 약 4,200쌍 이하이다.
+            extra_candidates=set(); TOP_N=6; MAX_DF=14
+            for i,fp in enumerate(fps):
+                hits=defaultdict(int)
+                for token in fp:
+                    ids=finv.get(token,())
+                    if len(ids)>MAX_DF: continue
+                    for j in ids:
+                        if j==i: continue
+                        # 극단적인 길이 차이만 제외. 70% 절대조건은 사용하지 않는다.
+                        if sem_lengths[i] and sem_lengths[j] and min(sem_lengths[i],sem_lengths[j])/max(sem_lengths[i],sem_lengths[j])<.20:
+                            continue
+                        hits[j]+=1
+                ranked=sorted(hits.items(),key=lambda x:(-x[1],x[0]))[:TOP_N]
+                for j,h in ranked:
+                    if h>=3 or min(sem_lengths[i],sem_lengths[j])<120:
+                        extra_candidates.add((min(i,j),max(i,j)))
+
+            candidate_source={}
+            for pair in base_candidates: candidate_source[pair]='base'
+            for pair in extra_candidates: candidate_source.setdefault(pair,'fingerprint')
             candidates=[]
-            for i,j in candidate_set:
+            for (i,j),source in candidate_source.items():
                 pair=tuple(sorted((valid[i].path,valid[j].path)))
-                if pair not in claimed:candidates.append((i,j))
-            candidates.sort()
-            self.q.put(("phase",f"유사도 정밀 비교 중 · 후보 {len(candidates):,}쌍"))
+                if pair not in claimed:candidates.append((i,j,source))
+            candidates.sort(key=lambda x:(x[0],x[1]))
+            self.q.put(("phase",f"유사도 정밀 비교 중 · 후보 {len(candidates):,}쌍 (기존 {len(base_candidates):,} / 보강 {len(extra_candidates):,})"))
 
-            for n,(i,j) in enumerate(candidates,1):
+            for n,(i,j,source) in enumerate(candidates,1):
                 a,b=valid[i],valid[j]
-                rough=jac(sigs[i],sigs[j])
                 sem=dice(fps[i],fps[j])
-                cross=(a.ext!=b.ext)
-                # 서로 다른 형식은 서식/개행/문단기호 차이를 제거한 fingerprint 점수를 우선한다.
-                # 같은 형식은 v23 판정을 우선하되 fingerprint가 후보 누락을 구제한다.
-                if cross:
+                if source=='fingerprint':
+                    # 보강 후보는 이미 포맷 차이를 제거한 동일 fingerprint 척도로 끝낸다.
+                    # 전체 문자열 SequenceMatcher를 호출하지 않는다.
                     score=sem
                 else:
+                    rough=jac(sigs[i],sigs[j])
                     ca,cb=compact(a.text),compact(b.text)
-                    if rough<max(.30,cut-.40) and sem<cut:continue
-                    if len(ca)+len(cb)<600000:
+                    # v23 후보도 공통 fingerprint가 기준을 넘으면 비싼 정렬 없이 종료한다.
+                    if sem>=cut:
+                        score=sem
+                    elif rough<max(.30,cut-.40):
+                        continue
+                    elif len(ca)+len(cb)<600000:
                         score=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio()
-                    else: score=max(rough,sem)
+                    else:
+                        score=max(rough,sem)
                 if score>=cut:edges.append((a,b,score))
                 if n%100==0:self.q.put(("phase",f"유사도 정밀 비교 중 · {n:,}/{len(candidates):,}쌍"))
             for a,b,score in sorted(edges,key=lambda x:-x[2]):groups.append(("유사",score,[a,b]))

@@ -1,7 +1,8 @@
-v28-3 checks
-- Python syntax: PASS
-- whitespace regression: PASS (common newlines uncoloured; only excess newline marked ws)
-- punctuation deletion regression: PASS (punctuation delete + common newline equal)
-- cross-format folder candidate path preserved
-- fingerprint rescue restricted to cross-extension pairs and low-frequency postings
-- original files remain read-only
+v29 rebuilt check
+- syntax: PASS
+- Tk smoke: PASS
+- Carmilla EPUB/TXT semantic fingerprint: 100%
+- whitespace regression: common newlines uncoloured, only extra newline = ws
+- punctuation regression: A-only .. = delete; common newline = equal
+- 700 synthetic docs candidate-stage benchmark completed
+- no __pycache__ / .pyc in package
