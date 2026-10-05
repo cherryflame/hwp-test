@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
 
-APP="문서 중복·유사성 검사기 — EPUB 지원판 v29 재구축"
+APP="문서 중복·유사성 검사기 — EPUB 지원판 v30 유사도 산식 수정"
 
 def resource_path(name):
     base=getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
@@ -223,6 +223,27 @@ def dice(a,b):
     if not a and not b:return 1.0
     if not a or not b:return 0.0
     return 2*len(a&b)/(len(a)+len(b))
+
+def semantic_length_ratio(la,lb):
+    """Fast whole-document coverage penalty for the final folder similarity score.
+    Fingerprints find matching content; this ratio makes one-sided omitted/added text reduce the final score.
+    """
+    if not la and not lb:return 1.0
+    if not la or not lb:return 0.0
+    return min(la,lb)/max(la,lb)
+
+def final_folder_similarity(fingerprint_score,la,lb):
+    # Candidate discovery and final scoring are deliberately separate.
+    # A fingerprint score can be 1.0 even when a short sentence was omitted between sampled anchors.
+    # The length ratio catches that omission in O(1) without reintroducing whole-document alignment.
+    return min(fingerprint_score, semantic_length_ratio(la,lb))
+
+def shown_group_score(judge,score):
+    # Keep the real score for thresholding/sorting. Only the UI/CSV representation of a 'similar'
+    # 100% result is capped so 100% remains visually reserved for exact/content-identical groups.
+    pct=score*100
+    if judge=='유사' and pct>=100.0-1e-9:return 99.9
+    return pct
 
 
 def _detail_tokens(s):
@@ -903,22 +924,24 @@ class App(tk.Tk):
             for n,(i,j,source) in enumerate(candidates,1):
                 a,b=valid[i],valid[j]
                 sem=dice(fps[i],fps[j])
+                coverage=semantic_length_ratio(sem_lengths[i],sem_lengths[j])
                 if source=='fingerprint':
-                    # 보강 후보는 이미 포맷 차이를 제거한 동일 fingerprint 척도로 끝낸다.
-                    # 전체 문자열 SequenceMatcher를 호출하지 않는다.
-                    score=sem
+                    # Fingerprints are for locating matching content. Final score also reflects
+                    # one-sided added/omitted text through whole-document semantic length coverage.
+                    score=min(sem,coverage)
                 else:
                     rough=jac(sigs[i],sigs[j])
                     ca,cb=compact(a.text),compact(b.text)
-                    # v23 후보도 공통 fingerprint가 기준을 넘으면 비싼 정렬 없이 종료한다.
+                    # Keep v29's fast path, but never let sampled fingerprints hide omitted text.
                     if sem>=cut:
-                        score=sem
+                        score=min(sem,coverage)
                     elif rough<max(.30,cut-.40):
                         continue
                     elif len(ca)+len(cb)<600000:
-                        score=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio()
+                        aligned=difflib.SequenceMatcher(None,ca,cb,autojunk=False).ratio()
+                        score=min(aligned,coverage)
                     else:
-                        score=max(rough,sem)
+                        score=min(max(rough,sem),coverage)
                 if score>=cut:edges.append((a,b,score))
                 if n%100==0:self.q.put(("phase",f"유사도 정밀 비교 중 · {n:,}/{len(candidates):,}쌍"))
             for a,b,score in sorted(edges,key=lambda x:-x[2]):groups.append(("유사",score,[a,b]))
@@ -997,7 +1020,7 @@ class App(tk.Tk):
         for gi,(j,score,rs) in enumerate(self.groups,1):
             if self.active_filter not in ("전체",j):continue
             tag={"완전 동일":"exact","내용 동일":"content","유사":"similar"}.get(j,"")
-            root=self.tree.insert("","end",text=str(gi),values=(j,f"{score*100:.1f}%","","","","",""),open=True,tags=(tag,))
+            root=self.tree.insert("","end",text=str(gi),values=(j,f"{shown_group_score(j,score):.1f}%","","","","",""),open=True,tags=(tag,))
             for r in rs:
                 self.tree.insert(root,"end",values=("","",display_safe(r.name),r.kind,self.sz(r.size),
                     time.strftime("%Y-%m-%d %H:%M",time.localtime(r.mtime)),display_safe(r.path)))
@@ -1072,7 +1095,7 @@ class App(tk.Tk):
         with open(p,"w",encoding="utf-8-sig",newline="") as f:
             w=csv.writer(f);w.writerow(["그룹","판정","유사도","파일명","형식","크기","수정일","경로"])
             for gi,(j,s,rs) in enumerate(self.groups,1):
-                for r in rs:w.writerow([gi,j,f"{s*100:.2f}%",r.name,r.kind,r.size,time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(r.mtime)),r.path])
+                for r in rs:w.writerow([gi,j,f"{shown_group_score(j,s):.2f}%",r.name,r.kind,r.size,time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(r.mtime)),r.path])
         messagebox.showinfo(APP,"저장했습니다.")
     @staticmethod
     def sz(n):

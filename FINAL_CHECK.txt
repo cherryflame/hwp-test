@@ -1,8 +1,12 @@
-v29 rebuilt check
-- syntax: PASS
-- Tk smoke: PASS
-- Carmilla EPUB/TXT semantic fingerprint: 100%
-- whitespace regression: common newlines uncoloured, only extra newline = ws
-- punctuation regression: A-only .. = delete; common newline = equal
-- 700 synthetic docs candidate-stage benchmark completed
-- no __pycache__ / .pyc in package
+v30 유사도 산식 수정 검증
+- 기준: v29 재구축판
+- 후보 탐색 구조 변경 없음
+- 상세 비교/색상 엔진 변경 없음
+- 최종 폴더 유사도: fingerprint 겹침 + 전체 의미문자 길이 비율 중 낮은 값 반영
+- 한쪽 문장 추가/누락 시 100% 방지
+- 유사 내부값 100%는 화면/CSV에서만 99.9% 상한
+- 완전 동일/내용 동일 100% 유지
+- 카밀라 EPUB/TXT: 내부 100%, 표시 99.9%
+- compile() 문법 검사 PASS
+- Tk UI smoke PASS
+- __pycache__/pyc 제외 확인
